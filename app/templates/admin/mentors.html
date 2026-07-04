@@ -1,0 +1,87 @@
+{% extends "admin/base.html" %}
+{% set active_page = "mentors" %}
+{% block title %}Mentors — Munus Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Mentors</h2>
+  <div class="d-flex gap-2">
+    {% if show_archived %}
+    <a href="/admin/mentors" class="btn btn-outline-secondary btn-sm"><i class="bi bi-eye-slash me-1"></i> Hide Archived</a>
+    {% else %}
+    <a href="/admin/mentors?show_archived=1" class="btn btn-outline-secondary btn-sm"><i class="bi bi-archive me-1"></i> Show Archived</a>
+    {% endif %}
+    <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addModal"><i class="bi bi-plus-lg"></i> Add Mentor</button>
+  </div>
+</div>
+
+<p class="text-muted small">Mentors with a Slack UID can be picked by students as the reviewer of a submission and receive Approve/Reject DMs.</p>
+
+<div class="card">
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0 align-middle">
+      <thead class="table-light"><tr><th>Name</th><th>Slack UID</th><th></th></tr></thead>
+      <tbody>
+        {% for m in mentors %}
+        <tr {% if not m.is_active %}class="table-secondary"{% endif %}>
+          <td>{{ m.name }}{% if not m.is_active %}<span class="badge bg-secondary ms-1">Archived</span>{% endif %}</td>
+          <td>{{ m.slack_user_id or '—' }}</td>
+          <td class="text-end">
+            {% if m.is_active %}
+              <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#edit{{ m.id }}">Edit</button>
+              <form method="post" action="/admin/mentors/{{ m.id }}/delete" class="d-inline" onsubmit="return confirm('Archive {{ m.name }}?')">
+                <button class="btn btn-sm btn-outline-danger">Archive</button>
+              </form>
+            {% else %}
+              <form method="post" action="/admin/mentors/{{ m.id }}/restore" class="d-inline">
+                <button class="btn btn-sm btn-outline-success">Restore</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Edit modals -->
+{% for m in mentors %}
+<div class="modal fade" id="edit{{ m.id }}" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="/admin/mentors/{{ m.id }}/edit">
+        <div class="modal-header"><h5 class="modal-title">Edit Mentor</h5></div>
+        <div class="modal-body">
+          <div class="mb-3"><label class="form-label">Name</label><input name="name" class="form-control" value="{{ m.name }}" required></div>
+          <div class="mb-3"><label class="form-label">Slack User ID</label><input name="slack_user_id" class="form-control" value="{{ m.slack_user_id or '' }}" placeholder="U01ABC..."></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+<!-- Add Mentor Modal -->
+<div class="modal fade" id="addModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="/admin/mentors">
+        <div class="modal-header"><h5 class="modal-title">Add Mentor</h5></div>
+        <div class="modal-body">
+          <div class="mb-3"><label class="form-label">Name</label><input name="name" class="form-control" required></div>
+          <div class="mb-3"><label class="form-label">Slack User ID <small class="text-muted">(optional)</small></label><input name="slack_user_id" class="form-control" placeholder="U01ABC..."></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Add</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

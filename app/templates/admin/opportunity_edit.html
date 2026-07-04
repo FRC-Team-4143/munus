@@ -1,0 +1,72 @@
+{% extends "admin/base.html" %}
+{% set active_page = "opportunities" %}
+{% block title %}{{ opp.name }} — Munus Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">{{ opp.name }}</h2>
+  <a href="/admin/opportunities" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left me-1"></i> Back</a>
+</div>
+
+<div class="row g-4">
+  <!-- Metadata -->
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-info-circle me-1"></i> Details</div>
+      <div class="card-body">
+        <form method="post" action="/admin/opportunities/{{ opp.id }}/edit">
+          <div class="mb-3"><label class="form-label">Name</label><input name="name" class="form-control" value="{{ opp.name }}" required></div>
+          <div class="mb-3"><label class="form-label">Description</label><textarea name="description" class="form-control" rows="4">{{ opp.description or '' }}</textarea></div>
+          <div class="mb-3"><label class="form-label">Location</label><input name="location" class="form-control" value="{{ opp.location or '' }}"></div>
+          <div class="mb-3"><label class="form-label">Attire</label><input name="attire" class="form-control" value="{{ opp.attire or '' }}"></div>
+          <div class="mb-3"><label class="form-label">Contact</label><input name="contact" class="form-control" value="{{ opp.contact or '' }}"></div>
+          <button type="submit" class="btn btn-primary w-100">Save Details</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shifts -->
+  <div class="col-lg-7">
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-calendar-plus me-1"></i> Add Shift</div>
+      <div class="card-body">
+        <form method="post" action="/admin/opportunities/{{ opp.id }}/shifts" class="row g-2">
+          <div class="col-md-6"><label class="form-label small">Start</label><input type="datetime-local" name="start_time" class="form-control" required></div>
+          <div class="col-md-6"><label class="form-label small">End</label><input type="datetime-local" name="end_time" class="form-control" required></div>
+          <div class="col-md-4"><label class="form-label small">Capacity <span class="text-muted">(0 = ∞)</span></label><input type="number" name="capacity" class="form-control" value="0" min="0"></div>
+          <div class="col-md-8"><label class="form-label small">Notes</label><input name="notes" class="form-control"></div>
+          <div class="col-12"><button type="submit" class="btn btn-primary btn-sm">Add Shift</button></div>
+        </form>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><i class="bi bi-calendar-week me-1"></i> Shifts</div>
+      <div class="card-body p-0">
+        {% if shifts %}
+        <table class="table table-hover mb-0 align-middle">
+          <thead class="table-light"><tr><th>When</th><th>Capacity</th><th>Signed Up</th><th></th></tr></thead>
+          <tbody>
+            {% for s in shifts %}
+            <tr>
+              <td>{{ s.start_time | shiftrange(s.end_time) }}{% if s.notes %}<div class="text-muted small">{{ s.notes }}</div>{% endif %}</td>
+              <td>{{ s.capacity if s.capacity else '∞' }}</td>
+              <td>{{ counts[s.id] }}</td>
+              <td class="text-end">
+                <form method="post" action="/admin/shifts/{{ s.id }}/delete" class="d-inline" onsubmit="return confirm('Delete this shift and its signups?')">
+                  <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted p-3 mb-0">No shifts yet — add one above.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

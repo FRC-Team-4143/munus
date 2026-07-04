@@ -1,0 +1,45 @@
+{% extends "admin/base.html" %}
+{% set active_page = "submissions" %}
+{% block title %}Submissions — Munus Admin{% endblock %}
+
+{% set status_badge = {"pending": "bg-warning text-dark", "approved": "bg-success", "rejected": "bg-danger"} %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Hour Submissions</h2>
+  <form method="get" action="/admin/submissions" class="d-flex gap-2">
+    <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+      <option value="" {% if not current_status %}selected{% endif %}>All statuses</option>
+      {% for st in statuses %}
+      <option value="{{ st.value }}" {% if current_status == st.value %}selected{% endif %}>{{ st.value | capitalize }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0 align-middle">
+      <thead class="table-light">
+        <tr><th>Student</th><th>Opportunity</th><th>Hours</th><th>Reviewer</th><th>Status</th><th>Submitted</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for s in submissions %}
+        <tr>
+          <td>{{ s.student.name }}</td>
+          <td>{{ s.opportunity.name if s.opportunity else '—' }}</td>
+          <td><span class="badge bg-secondary">{{ '%.1f' % s.hours }}</span></td>
+          <td>{{ s.reviewer.name if s.reviewer else '—' }}</td>
+          <td><span class="badge {{ status_badge[s.status.value] }}">{{ s.status.value | capitalize }}</span></td>
+          <td class="text-muted small">{{ s.submitted_at | localdt }}</td>
+          <td class="text-end"><a href="/admin/submissions/{{ s.id }}/edit" class="btn btn-sm btn-outline-secondary">Edit</a></td>
+        </tr>
+        {% endfor %}
+        {% if not submissions %}
+        <tr><td colspan="7" class="text-muted p-3">No submissions found.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

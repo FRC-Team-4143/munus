@@ -1,0 +1,72 @@
+{% extends "admin/base.html" %}
+{% set active_page = "import" %}
+{% block title %}Import — Munus Admin{% endblock %}
+
+{% block content %}
+<h2 class="mb-3">Import Students &amp; Mentors</h2>
+
+{% if created is defined %}
+<div class="alert alert-success alert-dismissible fade show py-2" role="alert">
+  <i class="bi bi-check-circle me-1"></i>
+  <strong>{{ created|length }} created</strong>, <strong>{{ updated|length }} updated</strong>{% if errors %}, <strong class="text-warning">{{ errors|length }} error(s)</strong>{% endif %}.
+  <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+</div>
+
+{% if errors %}
+<div class="card mb-4 border-danger">
+  <div class="card-header text-danger"><i class="bi bi-exclamation-triangle me-1"></i> Row Errors</div>
+  <div class="card-body p-0">
+    <table class="table table-sm mb-0">
+      <thead class="table-light"><tr><th>Row</th><th>Reason</th><th>Data</th></tr></thead>
+      <tbody>
+        {% for e in errors %}
+        <tr><td>{{ e.row }}</td><td class="text-danger">{{ e.reason }}</td><td><small class="text-muted">{{ e.data }}</small></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+
+<div class="row g-4">
+  <div class="col-md-5">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-upload me-1"></i> Upload CSV</div>
+      <div class="card-body">
+        <form method="post" action="/admin/import" enctype="multipart/form-data">
+          <div class="mb-3">
+            <label class="form-label">CSV File</label>
+            <input type="file" name="file" class="form-control" accept=".csv,text/csv" required>
+          </div>
+          <button type="submit" class="btn btn-primary">Import</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-7">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-table me-1"></i> Column Reference</div>
+      <div class="card-body">
+        <p class="text-muted small mb-2">Existing records are matched by name (case-insensitive) and updated. New students get an auto-generated portal code.</p>
+        <table class="table table-sm mb-3">
+          <thead class="table-light"><tr><th>Column</th><th>Students</th><th>Mentors</th><th>Valid values</th></tr></thead>
+          <tbody>
+            <tr><td><code>type</code></td><td>✅ required</td><td>✅ required</td><td><code>student</code> or <code>mentor</code></td></tr>
+            <tr><td><code>name</code></td><td>✅ required</td><td>✅ required</td><td>Full name</td></tr>
+            <tr><td><code>level</code></td><td>✅ required</td><td>—</td><td><code>freshman</code>, <code>4423</code>, <code>4143</code></td></tr>
+            <tr><td><code>team_number</code></td><td>optional</td><td>—</td><td><code>4143</code> or <code>4423</code></td></tr>
+            <tr><td><code>slack_user_id</code></td><td>optional</td><td>optional</td><td>Slack <code>U...</code> member ID</td></tr>
+          </tbody>
+        </table>
+        <p class="text-muted small mb-1"><strong>Example:</strong></p>
+        <pre class="bg-dark text-light p-2 rounded small mb-0">type,name,level,team_number,slack_user_id
+student,Alice Smith,4143,4143,U01ABC123
+student,Bob Jones,freshman,,
+mentor,Jane Doe,,,U02XYZ456</pre>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,72 @@
+{% extends "portal/base.html" %}
+{% set active_page = "opportunities" %}
+{% block title %}{{ opp.name }} — Munus{% endblock %}
+
+{% block content %}
+<a href="/opportunities" class="text-muted small"><i class="bi bi-arrow-left me-1"></i>All opportunities</a>
+<h2 class="mt-2 mb-3">{{ opp.name }}</h2>
+
+{% if message %}
+<div class="alert alert-info py-2">{{ message }}</div>
+{% endif %}
+
+<div class="row g-4">
+  <!-- Details (visible before signing up) -->
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-info-circle me-1"></i> Details</div>
+      <div class="card-body">
+        {% if opp.description %}<p>{{ opp.description }}</p>{% endif %}
+        <dl class="row mb-0 small">
+          <dt class="col-4 text-muted">Location</dt><dd class="col-8">{{ opp.location or '—' }}</dd>
+          <dt class="col-4 text-muted">Attire</dt><dd class="col-8">{{ opp.attire or '—' }}</dd>
+          <dt class="col-4 text-muted">Contact</dt><dd class="col-8">{{ opp.contact or '—' }}</dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shifts -->
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-calendar-week me-1"></i> Shifts</div>
+      <div class="card-body p-0">
+        {% if shift_rows %}
+        <ul class="list-group list-group-flush">
+          {% for r in shift_rows %}
+          <li class="list-group-item bg-transparent d-flex justify-content-between align-items-center flex-wrap gap-2" style="border-color:#2a1a1a;">
+            <div>
+              <div>{{ r.shift.start_time | shiftrange(r.shift.end_time) }}</div>
+              <div class="small text-muted">
+                {% if r.shift.notes %}{{ r.shift.notes }} · {% endif %}
+                {% if r.remaining is none %}Open — unlimited spots
+                {% elif r.is_full %}<span class="text-danger">Full</span>
+                {% else %}{{ r.remaining }} spot{{ '' if r.remaining == 1 else 's' }} left{% endif %}
+              </div>
+            </div>
+            <div>
+              {% if r.signed_up %}
+              <form method="post" action="/signups/{{ r.signup_id }}/cancel" class="d-inline">
+                <span class="badge bg-success me-2"><i class="bi bi-check-lg"></i> Signed up</span>
+                <button class="btn btn-sm btn-outline-danger">Cancel</button>
+              </form>
+              {% elif r.is_full %}
+              <button class="btn btn-sm btn-secondary" disabled>Full</button>
+              {% else %}
+              <form method="post" action="/shifts/{{ r.shift.id }}/signup" class="d-inline">
+                <button class="btn btn-sm btn-primary">Sign up</button>
+              </form>
+              {% endif %}
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-muted p-3 mb-0">No upcoming shifts for this opportunity yet.</p>
+        {% endif %}
+      </div>
+    </div>
+    <p class="text-muted small mt-2">Already volunteered? <a href="/submit">Submit your hours</a>.</p>
+  </div>
+</div>
+{% endblock %}

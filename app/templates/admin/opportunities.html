@@ -1,0 +1,64 @@
+{% extends "admin/base.html" %}
+{% set active_page = "opportunities" %}
+{% block title %}Opportunities — Munus Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Opportunities</h2>
+  <div class="d-flex gap-2">
+    {% if show_archived %}
+    <a href="/admin/opportunities" class="btn btn-outline-secondary btn-sm"><i class="bi bi-eye-slash me-1"></i> Hide Archived</a>
+    {% else %}
+    <a href="/admin/opportunities?show_archived=1" class="btn btn-outline-secondary btn-sm"><i class="bi bi-archive me-1"></i> Show Archived</a>
+    {% endif %}
+    <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addModal"><i class="bi bi-plus-lg"></i> New Opportunity</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0 align-middle">
+      <thead class="table-light"><tr><th>Name</th><th>Location</th><th>Shifts</th><th></th></tr></thead>
+      <tbody>
+        {% for o in opps %}
+        <tr {% if not o.is_active %}class="table-secondary"{% endif %}>
+          <td>{{ o.name }}{% if not o.is_active %}<span class="badge bg-secondary ms-1">Archived</span>{% endif %}</td>
+          <td class="text-muted">{{ o.location or '—' }}</td>
+          <td>{{ o.shifts | length }}</td>
+          <td class="text-end">
+            <a href="/admin/opportunities/{{ o.id }}/edit" class="btn btn-sm btn-outline-secondary">Edit &amp; Shifts</a>
+            <form method="post" action="/admin/opportunities/{{ o.id }}/archive" class="d-inline">
+              <button class="btn btn-sm {% if o.is_active %}btn-outline-danger{% else %}btn-outline-success{% endif %}">
+                {{ 'Archive' if o.is_active else 'Restore' }}
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- New Opportunity Modal -->
+<div class="modal fade" id="addModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="/admin/opportunities">
+        <div class="modal-header"><h5 class="modal-title">New Opportunity</h5></div>
+        <div class="modal-body">
+          <div class="mb-3"><label class="form-label">Name</label><input name="name" class="form-control" required></div>
+          <div class="mb-3"><label class="form-label">Description</label><textarea name="description" class="form-control" rows="3"></textarea></div>
+          <div class="mb-3"><label class="form-label">Location</label><input name="location" class="form-control"></div>
+          <div class="mb-3"><label class="form-label">Attire</label><input name="attire" class="form-control" placeholder="e.g. Team polo & closed-toe shoes"></div>
+          <div class="mb-3"><label class="form-label">Contact <small class="text-muted">(optional)</small></label><input name="contact" class="form-control"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create &amp; Add Shifts</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

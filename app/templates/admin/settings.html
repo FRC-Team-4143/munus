@@ -1,0 +1,39 @@
+{% extends "admin/base.html" %}
+{% set active_page = "settings" %}
+{% block title %}Settings — Munus Admin{% endblock %}
+
+{% block content %}
+<h2 class="mb-3">Settings</h2>
+
+{% if saved %}
+<div class="alert alert-success alert-dismissible fade show py-2" role="alert">
+  <i class="bi bi-check-circle me-1"></i> Settings saved.
+  <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<div class="card mb-4" style="max-width: 560px;">
+  <div class="card-header"><i class="bi bi-calendar-range me-1"></i> Season</div>
+  <div class="card-body">
+    <form method="post" action="/admin/settings">
+      <div class="mb-3">
+        <label class="form-label">Season start date</label>
+        <input type="date" name="season_start" class="form-control" value="{{ season_start.isoformat() if season_start else '' }}">
+        <div class="form-text">Approved hours are counted from this date. Leave blank to count all approved hours.</div>
+      </div>
+      <button type="submit" class="btn btn-primary">Save</button>
+    </form>
+  </div>
+</div>
+
+<div class="card" style="max-width: 560px;">
+  <div class="card-header"><i class="bi bi-info-circle me-1"></i> Environment</div>
+  <div class="card-body">
+    <dl class="row mb-0">
+      <dt class="col-sm-6 text-muted">Timezone</dt><dd class="col-sm-6">{{ timezone }}</dd>
+      <dt class="col-sm-6 text-muted">Reminder lead time</dt><dd class="col-sm-6">{{ reminder_lead_hours }} hrs before shift</dd>
+    </dl>
+    <p class="text-muted small mb-0 mt-2">These are set in <code>.env</code> and applied on restart.</p>
+  </div>
+</div>
+{% endblock %}

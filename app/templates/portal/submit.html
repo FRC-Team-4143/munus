@@ -1,0 +1,71 @@
+{% extends "portal/base.html" %}
+{% set active_page = "submit" %}
+{% block title %}Submit Hours — Munus{% endblock %}
+
+{% block content %}
+<h2 class="mb-3">Submit Volunteer Hours</h2>
+{% if message %}<div class="alert alert-info py-2">{{ message }}</div>{% endif %}
+
+<div class="card" style="max-width: 620px;">
+  <div class="card-body">
+    <form method="post" action="/submit">
+      <div class="mb-3">
+        <label class="form-label">Opportunity</label>
+        <select name="opportunity_id" id="opp" class="form-select">
+          <option value="">— Not listed / general —</option>
+          {% for o in opps %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}
+        </select>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Shift <small class="text-muted">(optional)</small></label>
+        <select name="shift_id" id="shift" class="form-select">
+          <option value="" data-opp="">— No specific shift —</option>
+          {% for o in opps %}{% for s in o.shifts %}
+          <option value="{{ s.id }}" data-opp="{{ o.id }}">{{ o.name }} · {{ s.start_time | shiftrange(s.end_time) }}</option>
+          {% endfor %}{% endfor %}
+        </select>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Hours volunteered</label>
+        <input type="number" step="0.25" min="0" name="hours" class="form-control" required>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Report <small class="text-muted">(what did you do?)</small></label>
+        <textarea name="report" class="form-control" rows="3"></textarea>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Reviewing mentor</label>
+        <select name="reviewer_mentor_id" class="form-select" required>
+          <option value="" disabled selected>— Choose a mentor to approve —</option>
+          {% for m in mentors %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}
+        </select>
+        <div class="form-text">This mentor will get a Slack message to approve your hours.</div>
+      </div>
+
+      <button type="submit" class="btn btn-primary">Submit for approval</button>
+    </form>
+  </div>
+</div>
+
+<script>
+  // Filter the shift dropdown to the selected opportunity.
+  const opp = document.getElementById('opp');
+  const shift = document.getElementById('shift');
+  function syncShifts() {
+    const val = opp.value;
+    for (const o of shift.options) {
+      const oppId = o.getAttribute('data-opp');
+      const show = oppId === '' || oppId === val || val === '';
+      o.hidden = !show;
+    }
+    const cur = shift.selectedOptions[0];
+    if (cur && cur.hidden) shift.value = '';
+  }
+  opp.addEventListener('change', syncShifts);
+  syncShifts();
+</script>
+{% endblock %}
