@@ -46,7 +46,9 @@ app/
     opportunities.py # Shift capacity checks, signup/cancel logic
     submissions.py   # Create submission -> DM reviewer; approve/reject -> notify student
     requirements.py  # Season required hours by level; season-total calc
-    scheduler.py     # APScheduler: pre-shift reminders, post-shift prompts, weekly DM
+    reports.py       # Batched roster progress report (approved/projected/required)
+    backup.py        # SQLite snapshot backup + staged restore (VACUUM INTO)
+    scheduler.py     # APScheduler: pre-shift reminders, post-shift prompts, weekly DM, backup
     slack_client.py  # AsyncWebClient wrapper + send_dm
     audit.py         # Append-only mutation log
     app_settings.py  # Persisted runtime settings (season_start)
@@ -61,9 +63,17 @@ All datetimes in the database are **naive UTC** (`app/utils.py`):
 - `now_utc()` for "now" (matches stored values)
 
 ### Student identity (portal)
-No passwords. Students identify with their `student_code` (auto-generated
-`sha256(name)[:8]`); the id is stored in a signed cookie (`munus_student`). Admin sessions
-use a separate signed cookie (`admin_session`), same pattern as Tempus.
+No passwords. Two ways in, both landing on the dashboard home (`portal/home.html`):
+- **Slack magic link (primary):** `/vhours` returns a "📊 Open my dashboard" button whose
+  URL is `/enter?token=...` — a signed, 14-day token (`services/student_auth.py`
+  `make_magic_token`/`read_magic_token`). `GET /enter` validates it and sets the session
+  cookie. `magic_link(student_id, next_path)` supports deep links (e.g. the post-shift DM
+  links straight to `/submit`); `safe_next()` blocks open redirects.
+- **Student code (fallback):** typing the auto-generated `student_code` (`sha256(name)[:8]`).
+
+Both set the `munus_student` signed cookie (30 days). All identity helpers live in
+`services/student_auth.py` so the portal and Slack routers share them without importing each
+other. Admin sessions use a separate `admin_session` cookie, same pattern as Tempus.
 
 ### Requirements & season total
 Required hours come from the `level_requirements` table (admin-editable, seeded from
@@ -73,10 +83,28 @@ Required hours come from the `level_requirements` table (admin-editable, seeded 
 
 ### Submission approval
 `services/submissions.py` owns Slack block building + DMs so both the portal and the Slack
-router can trigger notifications without a circular import. Flow: student submits and picks
-a reviewer → `notify_reviewer` DMs Approve/Reject buttons → `/slack/interact` calls
-`set_status` → `notify_student_of_review` DMs the outcome. Admins can do the same from
-`/admin/submissions`.
+router can trigger notifications without a circular import.
+
+**Primary path — log hours in Slack (no site visit):** after a shift ends,
+`job_post_shift_prompts` DMs the student interactive blocks (`post_shift_blocks`): **✅ Log
+{duration} hrs** (one tap, defaults to the scheduled length) or **✏️ Change hours** (opens
+`log_hours_modal`). `/slack/interact` handles `hours_quick` / `hours_adjust` (`views.open`) /
+`view_submission` → `submit_shift_hours` creates a pending submission.
+
+**Reviewer routing** (student never picks): `resolve_reviewer_id(shift)` =
+`shift.reviewer_mentor_id` (per-shift override) → else `opportunity.reviewer_mentor_id`
+(default approver, set in the admin opportunity editor) → else `None` (Admin → Submissions
+queue). Then `notify_reviewer` DMs Approve / **✏️ Edit hours** / Reject → `set_status` →
+`notify_student_of_review`. The **Edit hours** button opens `review_hours_modal` (the
+approver-side counterpart to the student's `log_hours_modal`, guarded to mentors); saving it
+updates the still-pending submission's hours/report and re-sends the review card. Admins can
+do the same from `/admin/submissions`.
+
+**Fallback:** the web `/submit` form (student picks a mentor) still exists for ad-hoc hours.
+
+Slack modals/buttons require the app's **Interactivity Request URL** = `/slack/interact`
+(public host); `views.open` needs a fresh `trigger_id`, so `hours_adjust` opens the modal
+inline (not in a background task).
 
 ### Database migrations
 No Alembic. Add a `def _migration(conn)` guarded by `inspect(conn)` in `database.py` and
@@ -95,4 +123,13 @@ add Bootstrap default light classes.
 |-----|---------|
 | Pre-shift reminders | every 30 min (DMs shifts within `REMINDER_LEAD_HOURS`) |
 | Post-shift submit prompts | every 30 min (DMs after a shift ends, once) |
+| Auto-reject unlogged shifts | every 6 h (records a rejected submission `AUTO_REJECT_DAYS` after a shift ends if the student never logged it; `0` = off) |
 | Weekly season-progress DM | `WEEKLY_DM_DAY` at `WEEKLY_DM_TIME` |
+| Database backup | `BACKUP_DAY` at `BACKUP_TIME` (SQLite snapshot, rotates to `BACKUP_KEEP`) |
+
+## Backups (`services/backup.py`)
+
+SQLite only. Snapshots use `VACUUM INTO` (consistent, no downtime). Restores are staged
+next to the DB and swapped in by `apply_pending_restore()` at startup — called from
+`init_db()` **before** the engine opens a connection. Admin UI at `/admin/backup`
+(download / stage-restore); a scheduled job writes rotating snapshots into `BACKUP_DIR`.

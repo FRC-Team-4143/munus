@@ -1,0 +1,73 @@
+{% extends "admin/base.html" %}
+{% set active_page = "submissions" %}
+{% block title %}Add Hours — Munus Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">Add Hours</h2>
+  <a href="/admin/submissions" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left me-1"></i> Back</a>
+</div>
+
+<p class="text-muted">Manually log volunteer hours — e.g. time earned before the app existed.
+Entries default to <strong>Approved</strong> so they count toward the student's season total right away.</p>
+
+<div class="card" style="max-width: 720px;">
+  <div class="card-header"><i class="bi bi-plus-circle me-1"></i> New Entry</div>
+  <div class="card-body">
+    <form method="post" action="/admin/submissions/new">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">Student</label>
+          <select name="student_id" class="form-select" required>
+            <option value="" disabled selected>Choose a student…</option>
+            {% for s in students %}
+            <option value="{{ s.id }}">{{ s.name }} ({{ s.level | levellabel }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Hours</label>
+          <input type="number" step="0.1" min="0" name="hours" class="form-control" required>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Date</label>
+          <input type="date" name="submitted_on" class="form-control" value="{{ today }}">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Opportunity <small class="text-muted">(optional)</small></label>
+          <select name="opportunity_id" class="form-select">
+            <option value="">— None —</option>
+            {% for o in opps %}
+            <option value="{{ o.id }}">{{ o.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Credited mentor <small class="text-muted">(optional)</small></label>
+          <select name="reviewer_mentor_id" class="form-select">
+            <option value="">— None —</option>
+            {% for m in mentors %}
+            <option value="{{ m.id }}">{{ m.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Status</label>
+          <select name="status" class="form-select">
+            {% for st in statuses %}
+            <option value="{{ st.value }}" {% if st.value == 'approved' %}selected{% endif %}>{{ st.value | capitalize }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Note <small class="text-muted">(optional — what they did)</small></label>
+          <textarea name="report" class="form-control" rows="2" placeholder="e.g. Preseason build sessions"></textarea>
+        </div>
+      </div>
+      <div class="d-flex justify-content-end mt-3">
+        <button type="submit" class="btn btn-primary">Add hours</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

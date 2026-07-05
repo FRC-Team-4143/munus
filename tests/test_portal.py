@@ -47,6 +47,82 @@ async def test_portal_requires_identity(client):
     assert resp.status_code == 303  # redirected to landing
 
 
+async def test_magic_link_signs_in_and_lands_on_dashboard(client, make_student):
+    from app.services.student_auth import make_magic_token
+
+    student = await make_student(code="zzz00001")
+    resp = await client.get(f"/enter?token={make_magic_token(student.id)}", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/"
+
+    home = await client.get("/")  # cookie now set -> dashboard renders
+    assert home.status_code == 200
+    assert "Season total" in home.text
+
+
+async def test_magic_link_deep_links_with_next(client, make_student):
+    from app.services.student_auth import make_magic_token
+
+    student = await make_student(code="zzz00002")
+    resp = await client.get(
+        f"/enter?token={make_magic_token(student.id)}&next=%2Fsubmit", follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/submit"
+
+
+async def test_invalid_magic_link_shows_hint(client):
+    resp = await client.get("/enter?token=bogus")
+    assert resp.status_code == 401
+    assert "expired" in resp.text.lower()
+    assert "/vhours" in resp.text
+
+
+async def test_dashboard_shows_projected_hours(client, db, make_student, make_opportunity, make_shift):
+    from app.models import Signup, SignupStatus
+
+    student = await make_student(code="proj0001")
+    opp = await make_opportunity(name="Build Day")
+    shift = await make_shift(opp.id, start_in_hours=24, length_hours=4)
+    db.add(Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    await _identify(client, "proj0001")
+    home = await client.get("/")
+    assert home.status_code == 200
+    assert "Projected" in home.text  # projected caption/segment shown
+
+
+async def test_season_progress_sticky_projected(db, make_student, make_opportunity, make_shift):
+    """The dashboard's projected estimate counts approved + pending + not-yet-logged shifts
+    (including ended ones), while `upcoming` lists only shifts that haven't ended."""
+    from app.models import HourSubmission, Signup, SignupStatus, StudentLevel, SubmissionStatus
+    from app.routers.portal import _season_progress
+
+    student = await make_student(code="stky0001", level=StudentLevel.freshman)  # required 5
+    opp = await make_opportunity()
+    db.add(HourSubmission(student_id=student.id, hours=2.0, status=SubmissionStatus.approved))
+
+    upcoming = await make_shift(opp.id, start_in_hours=24, length_hours=3)
+    db.add(Signup(shift_id=upcoming.id, student_id=student.id, status=SignupStatus.signed_up))
+
+    ended_unlogged = await make_shift(opp.id, start_in_hours=-5, length_hours=1)
+    db.add(Signup(shift_id=ended_unlogged.id, student_id=student.id, status=SignupStatus.signed_up))
+
+    ended_pending = await make_shift(opp.id, start_in_hours=-6, length_hours=4)
+    db.add(Signup(shift_id=ended_pending.id, student_id=student.id, status=SignupStatus.signed_up))
+    db.add(HourSubmission(
+        student_id=student.id, shift_id=ended_pending.id, hours=4.0,
+        status=SubmissionStatus.pending,
+    ))
+    await db.commit()
+
+    p = await _season_progress(db, student)
+    assert p["total"] == 2.0                # approved only (the solid bar)
+    assert p["projected"] == 10.0           # 2 approved + 4 pending + (3 + 1) scheduled
+    assert len(p["upcoming"]) == 1          # only the shift that hasn't ended is listed
+
+
 async def test_in_progress_shift_still_visible(client, db, make_student, make_opportunity, make_shift):
     """A shift that has started but not ended should still show and be joinable."""
     await make_student(code="ada00001")

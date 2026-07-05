@@ -1,5 +1,6 @@
 """Smoke tests for the admin UI (auth + template rendering)."""
 import pytest
+from sqlalchemy import select
 
 from app.config import settings
 
@@ -16,12 +17,287 @@ async def test_admin_requires_auth(client):
 
 @pytest.mark.parametrize("path", [
     "/admin", "/admin/opportunities", "/admin/submissions", "/admin/students",
-    "/admin/mentors", "/admin/requirements", "/admin/import", "/admin/audit", "/admin/settings",
+    "/admin/mentors", "/admin/report", "/admin/import",
+    "/admin/audit", "/admin/backup", "/admin/settings",
 ])
 async def test_admin_pages_render(client, path):
     await _login(client)
     resp = await client.get(path)
     assert resp.status_code == 200
+
+
+async def test_send_prompt_button_dms_signed_up_students(
+    client, db, monkeypatch, make_student, make_opportunity, make_shift
+):
+    import app.routers.admin as adminmod
+    from app.models import Signup, SignupStatus
+
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None):
+        calls.append((uid, blocks))
+        return "ts"
+
+    monkeypatch.setattr(adminmod, "send_dm", fake_send_dm)
+
+    await _login(client)
+    student = await make_student(slack="U0STU")
+    opp = await make_opportunity()
+    shift = await make_shift(opp.id)  # future shift — button ignores timing
+    db.add(Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    resp = await client.post(f"/admin/shifts/{shift.id}/send-prompt", follow_redirects=False)
+    assert resp.status_code == 303
+    assert "prompt_sent=1" in resp.headers["location"]
+    assert len(calls) == 1 and calls[0][0] == "U0STU"
+    assert any(b.get("type") == "actions" for b in calls[0][1])  # interactive prompt
+
+
+async def test_purge_requires_archived_then_cascades(
+    client, db, make_student, make_opportunity, make_shift
+):
+    from app.models import (
+        HourSubmission, Signup, SignupStatus, Student, SubmissionStatus,
+    )
+
+    await _login(client)
+    student = await make_student(code="purge001")
+    opp = await make_opportunity()
+    shift = await make_shift(opp.id)
+    db.add(Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.signed_up))
+    db.add(HourSubmission(student_id=student.id, hours=2.0, status=SubmissionStatus.approved))
+    await db.commit()
+    sid = student.id
+
+    async def _exists(model, **filters):
+        q = select(model)
+        for k, v in filters.items():
+            q = q.where(getattr(model, k) == v)
+        return (await db.execute(q)).scalars().first() is not None
+
+    # Active student: purge is refused (still archived-gated).
+    r = await client.post(f"/admin/students/{sid}/purge", follow_redirects=False)
+    assert r.status_code == 303
+    assert await _exists(Student, id=sid)
+
+    # Archive, then purge -> student and all their history are gone.
+    await client.post(f"/admin/students/{sid}/delete")  # archive
+    r = await client.post(f"/admin/students/{sid}/purge", follow_redirects=False)
+    assert r.status_code == 303
+    assert not await _exists(Student, id=sid)
+    assert not await _exists(HourSubmission, student_id=sid)
+    assert not await _exists(Signup, student_id=sid)
+
+
+async def test_opportunity_purge_requires_archived_then_cascades(
+    client, db, make_student, make_opportunity, make_shift
+):
+    from app.models import (
+        HourSubmission, Opportunity, Shift, Signup, SignupStatus, SubmissionStatus,
+    )
+
+    await _login(client)
+    student = await make_student(code="opp00001")
+    opp = await make_opportunity()
+    shift = await make_shift(opp.id)
+    db.add(Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.signed_up))
+    db.add(HourSubmission(
+        student_id=student.id, opportunity_id=opp.id, shift_id=shift.id,
+        hours=4.0, status=SubmissionStatus.approved,
+    ))
+    await db.commit()
+    oid, shid, sid = opp.id, shift.id, student.id
+
+    async def _exists(model, **filters):
+        q = select(model)
+        for k, v in filters.items():
+            q = q.where(getattr(model, k) == v)
+        return (await db.execute(q)).scalars().first() is not None
+
+    # Active opportunity: purge is refused (archive-gated).
+    r = await client.post(f"/admin/opportunities/{oid}/purge", follow_redirects=False)
+    assert r.status_code == 303
+    assert await _exists(Opportunity, id=oid)
+
+    # Archive, then purge -> opportunity + shift + signup + logged hours are all gone.
+    await client.post(f"/admin/opportunities/{oid}/archive")  # toggles is_active off
+    r = await client.post(f"/admin/opportunities/{oid}/purge", follow_redirects=False)
+    assert r.status_code == 303
+    assert not await _exists(Opportunity, id=oid)
+    assert not await _exists(Shift, id=shid)
+    assert not await _exists(Signup, shift_id=shid)
+    assert not await _exists(HourSubmission, student_id=sid)
+
+
+async def test_admin_add_manual_hours(client, db, make_student, make_opportunity):
+    from app.models import HourSubmission, StudentLevel, SubmissionStatus
+    from app.services.reports import student_progress_report
+
+    await _login(client)
+    student = await make_student(code="man00001", level=StudentLevel.freshman)  # required 5
+    opp = await make_opportunity(name="Preseason Build")
+
+    # The form renders with the opportunity dropdown populated.
+    page = await client.get("/admin/submissions/new")
+    assert page.status_code == 200
+    assert "Preseason Build" in page.text
+
+    # Posting approved hours creates an approved, reviewed submission.
+    resp = await client.post("/admin/submissions/new", data={
+        "student_id": str(student.id),
+        "hours": "12",
+        "submitted_on": "2026-07-01",
+        "opportunity_id": str(opp.id),
+        "report": "Preseason build sessions",
+        "status": "approved",
+    }, follow_redirects=False)
+    assert resp.status_code == 303
+    assert "added=1" in resp.headers["location"]
+
+    sub = (
+        await db.execute(select(HourSubmission).where(HourSubmission.student_id == student.id))
+    ).scalars().first()
+    assert sub is not None
+    assert sub.status == SubmissionStatus.approved
+    assert sub.hours == 12.0
+    assert sub.opportunity_id == opp.id
+    assert sub.reviewed_at is not None
+
+    # It counts toward the student's approved total in the report.
+    rows = await student_progress_report(db)
+    assert rows[0]["approved"] == 12.0
+
+
+async def test_submission_edit_page_and_delete(
+    client, db, make_student, make_mentor, make_opportunity, make_shift
+):
+    from app.models import HourSubmission, Signup, SignupStatus
+    from app.services.submissions import submit_shift_hours
+    from sqlalchemy import select as _select
+    from sqlalchemy.orm import selectinload as _selin
+
+    await _login(client)
+    mentor = await make_mentor(slack="U0REV")
+    student = await make_student(code="sub00001")
+    opp = await make_opportunity(reviewer_mentor_id=mentor.id)
+    shift = await make_shift(opp.id, length_hours=3)
+    db.add(Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.signed_up))
+    await db.commit()
+    signup = (
+        await db.execute(
+            _select(Signup).options(_selin(Signup.shift)).where(Signup.student_id == student.id)
+        )
+    ).scalars().first()
+    sub = await submit_shift_hours(db, signup, 3.0, "did stuff")  # a shift-linked submission
+
+    # Edit page must render (regression: shift was not eager-loaded → 500).
+    page = await client.get(f"/admin/submissions/{sub.id}/edit")
+    assert page.status_code == 200
+
+    # Delete removes it.
+    r = await client.post(f"/admin/submissions/{sub.id}/delete", follow_redirects=False)
+    assert r.status_code == 303
+    assert (await db.execute(_select(HourSubmission).where(HourSubmission.id == sub.id))).scalars().first() is None
+
+
+async def test_opportunity_notify_dms_upcoming_signups(
+    client, db, monkeypatch, make_student, make_opportunity, make_shift
+):
+    import app.routers.admin as adminmod
+    from app.models import Signup, SignupStatus
+
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None):
+        calls.append((uid, text))
+        return "ts"
+
+    monkeypatch.setattr(adminmod, "send_dm", fake_send_dm)
+
+    await _login(client)
+    student = await make_student(slack="U0STU")
+    opp = await make_opportunity(name="Food Drive", location="Community Center", attire="Team polo")
+    upcoming = await make_shift(opp.id, start_in_hours=24)
+    past = await make_shift(opp.id, start_in_hours=-48)  # ended → not included
+    db.add(Signup(shift_id=upcoming.id, student_id=student.id, status=SignupStatus.signed_up))
+    db.add(Signup(shift_id=past.id, student_id=student.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    resp = await client.post(f"/admin/opportunities/{opp.id}/notify", follow_redirects=False)
+    assert resp.status_code == 303
+    assert "notified=1" in resp.headers["location"]
+    # One grouped DM to the student, referencing the opportunity + location.
+    assert len(calls) == 1 and calls[0][0] == "U0STU"
+    assert "Food Drive" in calls[0][1]
+    assert "Community Center" in calls[0][1]
+    assert "Team polo" in calls[0][1]  # attire included
+
+
+async def test_manager_role_scoped_to_opportunities(client, monkeypatch):
+    from app.config import settings as cfg
+    monkeypatch.setattr(cfg, "manager_password", "mgr-pass")
+
+    # Manager login lands on the Opportunities page.
+    r = await client.post("/admin/login", data={"password": "mgr-pass"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/admin/opportunities"
+
+    # Can view + create opportunities.
+    assert (await client.get("/admin/opportunities")).status_code == 200
+    cr = await client.post("/admin/opportunities", data={"name": "Mgr Opp"}, follow_redirects=False)
+    assert cr.status_code == 303 and "/admin/opportunities/" in cr.headers["location"]
+
+    # Blocked from every admin-only section → bounced to Opportunities.
+    for path in ("/admin", "/admin/students", "/admin/submissions", "/admin/settings", "/admin/backup", "/admin/report"):
+        resp = await client.get(path, follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/admin/opportunities", path
+
+    # Sidebar hides admin sections for a manager.
+    page = await client.get("/admin/opportunities")
+    assert "/admin/students" not in page.text
+    assert "/admin/backup" not in page.text
+    assert "/admin/opportunities" in page.text
+
+
+async def test_report_notify_dms_slack_linked_students(
+    client, db, monkeypatch, make_student, make_opportunity, make_shift
+):
+    import app.routers.admin as adminmod
+    from app.models import Signup, SignupStatus
+
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None):
+        calls.append((uid, text))
+        return "ts"
+
+    monkeypatch.setattr(adminmod, "send_dm", fake_send_dm)
+
+    await _login(client)
+    linked = await make_student(code="rn000001", slack="U0STU")
+    await make_student(code="rn000002")  # no Slack ID -> skipped
+    opp = await make_opportunity(name="Beach Cleanup")
+    shift = await make_shift(opp.id, start_in_hours=24)
+    db.add(Signup(shift_id=shift.id, student_id=linked.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    resp = await client.post("/admin/report/notify", follow_redirects=False)
+    assert resp.status_code == 303
+    assert "notified=1" in resp.headers["location"]
+    # Only the Slack-linked student is DMed, with the /vhours summary content.
+    assert len(calls) == 1 and calls[0][0] == "U0STU"
+    assert "Season total:" in calls[0][1]
+    assert "Beach Cleanup" in calls[0][1]
+
+
+async def test_admin_report_export_csv(client):
+    await _login(client)
+    resp = await client.get("/admin/report/export")
+    assert resp.status_code == 200
+    assert "text/csv" in resp.headers["content-type"]
+    assert "Student,Level,Approved Hours,Projected Hours" in resp.text
 
 
 async def test_admin_create_opportunity_and_shift(client):

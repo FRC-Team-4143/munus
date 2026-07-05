@@ -40,6 +40,10 @@
               <form method="post" action="/admin/students/{{ s.id }}/restore" class="d-inline">
                 <button class="btn btn-sm btn-outline-success">Restore</button>
               </form>
+              <form method="post" action="/admin/students/{{ s.id }}/purge" class="d-inline"
+                    onsubmit="return confirm('Permanently delete {{ s.name }} and ALL their signups and logged hours? This cannot be undone.')">
+                <button class="btn btn-sm btn-outline-danger" title="Delete permanently"><i class="bi bi-trash"></i></button>
+              </form>
             {% endif %}
           </td>
         </tr>

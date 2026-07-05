@@ -45,6 +45,11 @@ def now_utc() -> datetime:
     return datetime.utcnow()
 
 
+def shift_length_hours(start: datetime, end: datetime) -> float:
+    """Duration of a shift in hours. Used to project hours from signed-up shifts."""
+    return max(0.0, (end - start).total_seconds() / 3600.0)
+
+
 def format_shift_range(start: datetime, end: Optional[datetime] = None) -> str:
     """Human-friendly local rendering of a shift's start (and optional end)."""
     start_local = utc_to_local(start)
@@ -60,6 +65,22 @@ def format_shift_range(start: datetime, end: Optional[datetime] = None) -> str:
         f"{start_local.strftime('%a %b %d · %I:%M %p')}"
         f" – {end_local.strftime('%a %b %d · %I:%M %p')}"
     )
+
+
+def format_date_range(shifts) -> str:
+    """Compact local date span across a set of shifts (duck-typed on `.start_time`):
+    '' when empty, 'Jul 05' for a single date, else 'Jul 05 – Aug 20' (adding the year
+    only when the span crosses years)."""
+    starts = [s.start_time for s in shifts if getattr(s, "start_time", None) is not None]
+    if not starts:
+        return ""
+    first = utc_to_local(min(starts)).date()
+    last = utc_to_local(max(starts)).date()
+    if first == last:
+        return first.strftime("%b %d")
+    if first.year == last.year:
+        return f"{first.strftime('%b %d')} – {last.strftime('%b %d')}"
+    return f"{first.strftime('%b %d, %Y')} – {last.strftime('%b %d, %Y')}"
 
 
 def current_week_bounds() -> tuple[datetime, datetime]:

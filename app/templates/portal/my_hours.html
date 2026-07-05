@@ -23,8 +23,19 @@
     </div>
     <div class="progress" role="progressbar" style="height: 10px;">
       <div class="progress-bar bg-success" style="width: {{ pct }}%;"></div>
+      {% if projected_pct > pct %}
+      <div class="progress-bar bg-success progress-bar-striped" style="width: {{ projected_pct - pct }}%; opacity: .45;"
+           title="Projected {{ '%.1f' % projected }} hrs with upcoming shifts"></div>
+      {% endif %}
     </div>
+    {% if projected > total %}
+    <p class="text-muted small mt-2 mb-0">
+      Projected <strong>{{ '%.1f' % projected }} hrs</strong> once you complete your upcoming shifts.
+      Only <strong>approved</strong> submissions count toward your total.
+    </p>
+    {% else %}
     <p class="text-muted small mt-2 mb-0">Only <strong>approved</strong> submissions count toward your total.</p>
+    {% endif %}
   </div>
 </div>
 

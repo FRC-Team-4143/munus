@@ -6,8 +6,28 @@ from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models import Shift, Signup, SignupStatus
+from app.utils import now_utc
+
+
+async def upcoming_signups_for_student(db: AsyncSession, student_id: int) -> list[Signup]:
+    """A student's signed-up shifts that haven't ended yet, soonest first, with the
+    shift's opportunity eager-loaded. Shared by the dashboard and the `/vhours` command."""
+    return (
+        await db.execute(
+            select(Signup)
+            .options(selectinload(Signup.shift).selectinload(Shift.opportunity))
+            .join(Shift, Shift.id == Signup.shift_id)
+            .where(
+                Signup.student_id == student_id,
+                Signup.status == SignupStatus.signed_up,
+                Shift.end_time >= now_utc(),
+            )
+            .order_by(Shift.start_time)
+        )
+    ).scalars().all()
 
 
 async def active_signup_count(db: AsyncSession, shift_id: int) -> int:

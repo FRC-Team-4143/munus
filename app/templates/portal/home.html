@@ -1,0 +1,89 @@
+{% extends "portal/base.html" %}
+{% set active_page = "home" %}
+{% block title %}Home — Munus{% endblock %}
+
+{% set status_badge = {"pending": "bg-warning text-dark", "approved": "bg-success", "rejected": "bg-danger"} %}
+
+{% block content %}
+<h2 class="mb-4">Hi, {{ student.name.split()[0] }} 👋</h2>
+
+<div class="row g-4">
+  <!-- Progress -->
+  <div class="col-lg-5">
+    <div class="card mb-4">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-end mb-2">
+          <div>
+            <div class="text-muted small">{{ student.level | levellabel }} · Season total</div>
+            <div class="fs-3 fw-bold">{{ '%.1f' % progress.total }} <span class="text-muted fs-6">/ {{ '%.1f' % progress.required }} hrs</span></div>
+          </div>
+          {% if progress.total >= progress.required %}
+          <span class="badge bg-success fs-6"><i class="bi bi-check-lg"></i> Met</span>
+          {% else %}
+          <span class="badge bg-warning text-dark fs-6">{{ '%.1f' % progress.remaining }} hrs to go</span>
+          {% endif %}
+        </div>
+        <div class="progress" role="progressbar" style="height: 10px;">
+          <div class="progress-bar bg-success" style="width: {{ progress.pct }}%;"></div>
+          {% if progress.projected_pct > progress.pct %}
+          <div class="progress-bar bg-success progress-bar-striped" style="width: {{ progress.projected_pct - progress.pct }}%; opacity: .45;"
+               title="Projected {{ '%.1f' % progress.projected }} hrs with upcoming shifts"></div>
+          {% endif %}
+        </div>
+        {% if progress.projected > progress.total %}
+        <p class="text-muted small mt-2 mb-0">Projected <strong>{{ '%.1f' % progress.projected }} hrs</strong> with your upcoming shifts.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="d-grid gap-2">
+      <a href="/opportunities" class="btn btn-primary"><i class="bi bi-megaphone me-1"></i> Browse opportunities</a>
+      <a href="/submit" class="btn btn-outline-primary"><i class="bi bi-clock-history me-1"></i> Submit hours</a>
+      <a href="/my-hours" class="btn btn-outline-secondary"><i class="bi bi-list-check me-1"></i> View all my hours</a>
+    </div>
+  </div>
+
+  <!-- Upcoming shifts + recent submissions -->
+  <div class="col-lg-7">
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-calendar-week me-1"></i> My Upcoming Shifts</div>
+      <div class="card-body p-0">
+        {% if upcoming %}
+        <ul class="list-group list-group-flush">
+          {% for su in upcoming %}
+          <li class="list-group-item bg-transparent" style="border-color:#2a1a1a;">
+            <div>{{ su.shift.opportunity.name if su.shift.opportunity else 'Volunteer shift' }}</div>
+            <div class="small text-muted">{{ su.shift.start_time | shiftrange(su.shift.end_time) }}</div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-muted p-3 mb-0">No upcoming shifts. <a href="/opportunities">Find one to sign up for</a>.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><i class="bi bi-list-check me-1"></i> Recent Submissions</div>
+      <div class="card-body p-0">
+        {% if recent %}
+        <table class="table table-hover mb-0 align-middle">
+          <tbody>
+            {% for s in recent %}
+            <tr>
+              <td>{{ s.opportunity.name if s.opportunity else '—' }}</td>
+              <td>{{ '%.1f' % s.hours }} hrs</td>
+              <td><span class="badge {{ status_badge[s.status.value] }}">{{ s.status.value | capitalize }}</span></td>
+              <td class="text-muted small">{{ s.submitted_at | localdt('%b %d') }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted p-3 mb-0">You haven't submitted any hours yet.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

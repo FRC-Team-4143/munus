@@ -8,11 +8,13 @@ import hashlib
 import hmac
 import io
 import logging
-from datetime import date, datetime
+import os
+import tempfile
+from datetime import date, datetime, time
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Request, Response, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import delete, func, select
@@ -28,8 +30,13 @@ from app.models import (
 from app.services import audit, submissions as submission_service
 from app.services.app_settings import get_season_start, set_season_start
 from app.services.opportunities import active_signup_count
+from app.services.reports import student_progress_report, student_vhours_message
 from app.services.requirements import level_requirements_map, resolve_required_hours, season_total_hours
-from app.utils import local_to_utc, utc_to_local, format_shift_range
+from app.services.slack_client import send_dm
+from app.utils import (
+    format_date_range, format_shift_range, local_to_utc, now_utc, shift_length_hours,
+    today_local, utc_to_local,
+)
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +46,7 @@ templates.env.filters["localdt"] = (
     lambda dt, fmt="%m/%d %I:%M %p": utc_to_local(dt).strftime(fmt) if dt else ""
 )
 templates.env.filters["shiftrange"] = lambda s, e=None: format_shift_range(s, e)
+templates.env.filters["daterange"] = format_date_range
 templates.env.filters["levellabel"] = level_label
 
 _signer = URLSafeTimedSerializer(settings.session_secret, salt="admin-session")
@@ -50,23 +58,56 @@ def _student_code(name: str) -> str:
     return hashlib.sha256(name.strip().lower().encode()).hexdigest()[:8]
 
 
+def _opt_id(raw: Optional[str]) -> Optional[int]:
+    """Parse an optional integer form field (e.g. a mentor dropdown), '' -> None."""
+    return int(raw) if raw and str(raw).strip() else None
+
+
+async def _active_mentors(db: AsyncSession):
+    return (await db.execute(select(Mentor).where(Mentor.is_active.is_(True)).order_by(Mentor.name))).scalars().all()
+
+
 # ── Auth helpers ───────────────────────────────────────────────────────────────
 
-def _is_authenticated(request: Request) -> bool:
+def _role(request: Request) -> Optional[str]:
+    """The signed-in role from the session cookie: 'admin', 'manager', or None."""
     token = request.cookies.get(_COOKIE)
     if not token:
-        return False
+        return None
     try:
-        _signer.loads(token, max_age=_MAX_AGE)
-        return True
+        value = _signer.loads(token, max_age=_MAX_AGE)
     except (BadSignature, SignatureExpired):
-        return False
+        return None
+    return value if value in ("admin", "manager") else "admin"  # legacy tokens = admin
+
+
+def _is_authenticated(request: Request) -> bool:
+    return _role(request) is not None
+
+
+def _manager_allowed(path: str) -> bool:
+    """The only routes a 'manager' may reach: creating/managing opportunities and shifts."""
+    p = path.rstrip("/")
+    return (
+        p == "/admin/opportunities"
+        or p.startswith("/admin/opportunities/")
+        or p.startswith("/admin/shifts/")
+    )
 
 
 def _require_auth(request: Request):
-    if not _is_authenticated(request):
+    """Gate every admin route. Admins pass everywhere; a manager only on opportunity/shift
+    paths (otherwise bounced to their Opportunities page); anonymous users to the login."""
+    role = _role(request)
+    if role is None:
         return RedirectResponse("/admin/login", status_code=303)
-    return None
+    if role == "admin" or _manager_allowed(request.url.path):
+        return None
+    return RedirectResponse("/admin/opportunities", status_code=303)
+
+
+# Expose the role to templates so the sidebar can hide admin-only sections from managers.
+templates.env.globals["session_role"] = _role
 
 
 # ── Login / logout ─────────────────────────────────────────────────────────────
@@ -82,7 +123,13 @@ async def admin_login_post(
     password: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
-    if not hmac.compare_digest(password, settings.admin_password):
+    role = None
+    if hmac.compare_digest(password, settings.admin_password):
+        role = "admin"
+    elif settings.manager_password and hmac.compare_digest(password, settings.manager_password):
+        role = "manager"
+
+    if role is None:
         await audit.record(db, request, "admin.login_failed", "Failed admin login attempt", actor="anonymous")
         await db.commit()
         return templates.TemplateResponse(
@@ -90,10 +137,11 @@ async def admin_login_post(
             {"request": request, "error": "Incorrect password."},
             status_code=401,
         )
-    await audit.record(db, request, "admin.login", "Admin signed in")
+    await audit.record(db, request, "admin.login", f"{role.capitalize()} signed in", actor=role)
     await db.commit()
-    response = RedirectResponse("/admin", status_code=303)
-    response.set_cookie(_COOKIE, _signer.dumps("authenticated"), httponly=True, samesite="lax", max_age=_MAX_AGE)
+    dest = "/admin" if role == "admin" else "/admin/opportunities"
+    response = RedirectResponse(dest, status_code=303)
+    response.set_cookie(_COOKIE, _signer.dumps(role), httponly=True, samesite="lax", max_age=_MAX_AGE)
     return response
 
 
@@ -257,6 +305,29 @@ async def admin_students_restore(student_id: int, request: Request, db: AsyncSes
     return RedirectResponse("/admin/students?show_archived=1", status_code=303)
 
 
+@router.post("/students/{student_id}/purge")
+async def admin_students_purge(student_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """Permanently delete a student and ALL their history (signups + submissions).
+
+    Only allowed once the student is archived — matches Tempus's archive-then-purge flow.
+    """
+    if redirect := _require_auth(request):
+        return redirect
+    student = (await db.execute(select(Student).where(Student.id == student_id))).scalars().first()
+    if student and not student.is_active:
+        name = student.name
+        await db.execute(delete(Signup).where(Signup.student_id == student_id))
+        await db.execute(delete(HourSubmission).where(HourSubmission.student_id == student_id))
+        await audit.record(
+            db, request, "student.purge",
+            f"Permanently deleted archived student {name} and all their signups/submissions",
+            entity_type="student", entity_id=student_id,
+        )
+        await db.execute(delete(Student).where(Student.id == student_id))
+        await db.commit()
+    return RedirectResponse("/admin/students?show_archived=1", status_code=303)
+
+
 # ── Mentors ────────────────────────────────────────────────────────────────────
 
 @router.get("/mentors", response_class=HTMLResponse)
@@ -347,7 +418,8 @@ async def admin_opportunities_list(
     opps = (await db.execute(q)).scalars().all()
     return templates.TemplateResponse(
         "admin/opportunities.html",
-        {"request": request, "opps": opps, "show_archived": bool(show_archived)},
+        {"request": request, "opps": opps, "show_archived": bool(show_archived),
+         "mentors": await _active_mentors(db)},
     )
 
 
@@ -359,6 +431,7 @@ async def admin_opportunities_create(
     location: Optional[str] = Form(None),
     attire: Optional[str] = Form(None),
     contact: Optional[str] = Form(None),
+    reviewer_mentor_id: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     if redirect := _require_auth(request):
@@ -369,6 +442,7 @@ async def admin_opportunities_create(
         location=location.strip() if location else None,
         attire=attire.strip() if attire else None,
         contact=contact.strip() if contact else None,
+        reviewer_mentor_id=_opt_id(reviewer_mentor_id),
     )
     db.add(opp)
     await audit.record(db, request, "opportunity.create", f"Created opportunity {opp.name}", entity_type="opportunity")
@@ -389,9 +463,14 @@ async def admin_opportunities_edit_get(opp_id: int, request: Request, db: AsyncS
         return RedirectResponse("/admin/opportunities", status_code=303)
     shifts = sorted(opp.shifts, key=lambda s: s.start_time)
     counts = {s.id: await active_signup_count(db, s.id) for s in shifts}
+    all_mentors = (await db.execute(select(Mentor).order_by(Mentor.name))).scalars().all()
     return templates.TemplateResponse(
         "admin/opportunity_edit.html",
-        {"request": request, "opp": opp, "shifts": shifts, "counts": counts},
+        {
+            "request": request, "opp": opp, "shifts": shifts, "counts": counts,
+            "mentors": [m for m in all_mentors if m.is_active],
+            "mentor_names": {m.id: m.name for m in all_mentors},
+        },
     )
 
 
@@ -404,6 +483,7 @@ async def admin_opportunities_edit_post(
     location: Optional[str] = Form(None),
     attire: Optional[str] = Form(None),
     contact: Optional[str] = Form(None),
+    reviewer_mentor_id: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     if redirect := _require_auth(request):
@@ -415,6 +495,7 @@ async def admin_opportunities_edit_post(
         opp.location = location.strip() if location else None
         opp.attire = attire.strip() if attire else None
         opp.contact = contact.strip() if contact else None
+        opp.reviewer_mentor_id = _opt_id(reviewer_mentor_id)
         await audit.record(db, request, "opportunity.edit", f"Edited opportunity {opp.name}", entity_type="opportunity", entity_id=opp.id)
         await db.commit()
     return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
@@ -434,6 +515,87 @@ async def admin_opportunities_archive(opp_id: int, request: Request, db: AsyncSe
     return RedirectResponse("/admin/opportunities?show_archived=1", status_code=303)
 
 
+@router.post("/opportunities/{opp_id}/purge")
+async def admin_opportunities_purge(opp_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """Permanently delete an ARCHIVED opportunity and ALL its history — shifts, their
+    signups, and every hour submission logged against the opportunity or its shifts.
+
+    Only allowed once the opportunity is archived — matches the students archive-then-purge
+    flow. Deleting the submissions removes those hours from students' season totals.
+    """
+    if redirect := _require_auth(request):
+        return redirect
+    opp = (await db.execute(select(Opportunity).where(Opportunity.id == opp_id))).scalars().first()
+    if opp and not opp.is_active:
+        name = opp.name
+        shift_ids = (
+            await db.execute(select(Shift.id).where(Shift.opportunity_id == opp_id))
+        ).scalars().all()
+        # Delete every submission tied to the opportunity or any of its shifts.
+        await db.execute(delete(HourSubmission).where(HourSubmission.opportunity_id == opp_id))
+        if shift_ids:
+            await db.execute(delete(HourSubmission).where(HourSubmission.shift_id.in_(shift_ids)))
+            await db.execute(delete(Signup).where(Signup.shift_id.in_(shift_ids)))
+            await db.execute(delete(Shift).where(Shift.opportunity_id == opp_id))
+        await audit.record(
+            db, request, "opportunity.purge",
+            f"Permanently deleted archived opportunity {name} and all its shifts/signups/hours",
+            entity_type="opportunity", entity_id=opp_id,
+        )
+        await db.execute(delete(Opportunity).where(Opportunity.id == opp_id))
+        await db.commit()
+    return RedirectResponse("/admin/opportunities?show_archived=1", status_code=303)
+
+
+@router.post("/opportunities/{opp_id}/notify")
+async def admin_opportunities_notify(opp_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """DM every student a reminder of the upcoming shifts they're signed up for in this
+    opportunity (one grouped message per student)."""
+    if redirect := _require_auth(request):
+        return redirect
+
+    opp = (
+        await db.execute(select(Opportunity).options(selectinload(Opportunity.shifts)).where(Opportunity.id == opp_id))
+    ).scalars().first()
+    if not opp:
+        return RedirectResponse("/admin/opportunities", status_code=303)
+
+    now = now_utc()
+    upcoming = {s.id: s for s in opp.shifts if s.end_time >= now}
+    by_student: dict[int, tuple] = {}  # student_id -> (student, [shifts])
+    if upcoming:
+        signups = (
+            await db.execute(
+                select(Signup)
+                .options(selectinload(Signup.student))
+                .where(Signup.shift_id.in_(upcoming.keys()), Signup.status == SignupStatus.signed_up)
+            )
+        ).scalars().all()
+        for su in signups:
+            if su.student and su.student.slack_user_id:
+                by_student.setdefault(su.student_id, (su.student, []))[1].append(upcoming[su.shift_id])
+
+    sent = 0
+    for student, shifts in by_student.values():
+        shifts.sort(key=lambda s: s.start_time)
+        lines = "\n".join(f"• {format_shift_range(s.start_time, s.end_time)}" for s in shifts)
+        text = f"🔔 *Reminder — {opp.name}*\nYou're signed up for:\n{lines}"
+        if opp.location:
+            text += f"\nLocation: {opp.location}"
+        if opp.attire:
+            text += f"\nAttire: {opp.attire}"
+        await send_dm(student.slack_user_id, text)
+        sent += 1
+
+    await audit.record(
+        db, request, "opportunity.notify",
+        f"Sent shift reminders for {opp.name} to {sent} student(s)",
+        entity_type="opportunity", entity_id=opp_id,
+    )
+    await db.commit()
+    return RedirectResponse(f"/admin/opportunities?notified={sent}", status_code=303)
+
+
 @router.post("/opportunities/{opp_id}/shifts")
 async def admin_shift_create(
     opp_id: int,
@@ -442,6 +604,7 @@ async def admin_shift_create(
     end_time: str = Form(...),
     capacity: int = Form(0),
     notes: Optional[str] = Form(None),
+    reviewer_mentor_id: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     if redirect := _require_auth(request):
@@ -452,10 +615,76 @@ async def admin_shift_create(
         end_time=local_to_utc(datetime.fromisoformat(end_time)),
         capacity=capacity,
         notes=notes.strip() if notes else None,
+        reviewer_mentor_id=_opt_id(reviewer_mentor_id),
     ))
     await audit.record(db, request, "shift.create", f"Added shift to opportunity {opp_id}", entity_type="shift")
     await db.commit()
     return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
+
+
+@router.post("/shifts/{shift_id}/reviewer")
+async def admin_shift_reviewer(
+    shift_id: int,
+    request: Request,
+    reviewer_mentor_id: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set/clear a shift's approver override (blank = use the opportunity's default)."""
+    if redirect := _require_auth(request):
+        return redirect
+    shift = (await db.execute(select(Shift).where(Shift.id == shift_id))).scalars().first()
+    if shift:
+        shift.reviewer_mentor_id = _opt_id(reviewer_mentor_id)
+        await audit.record(db, request, "shift.reviewer", f"Set approver override for shift {shift_id}", entity_type="shift", entity_id=shift_id)
+        await db.commit()
+        return RedirectResponse(f"/admin/opportunities/{shift.opportunity_id}/edit", status_code=303)
+    return RedirectResponse("/admin/opportunities", status_code=303)
+
+
+@router.post("/shifts/{shift_id}/send-prompt")
+async def admin_shift_send_prompt(shift_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """Test helper: DM the interactive 'log your hours' prompt to this shift's signed-up
+    students right now, ignoring the usual end-time/prompted-once/already-submitted guards."""
+    if redirect := _require_auth(request):
+        return redirect
+
+    shift = (
+        await db.execute(select(Shift).options(selectinload(Shift.opportunity)).where(Shift.id == shift_id))
+    ).scalars().first()
+    if not shift:
+        return RedirectResponse("/admin/opportunities", status_code=303)
+
+    signups = (
+        await db.execute(
+            select(Signup)
+            .options(
+                selectinload(Signup.student),
+                selectinload(Signup.shift).selectinload(Shift.opportunity),
+            )
+            .where(Signup.shift_id == shift_id, Signup.status == SignupStatus.signed_up)
+        )
+    ).scalars().all()
+
+    default_hours = shift_length_hours(shift.start_time, shift.end_time)
+    sent = 0
+    for signup in signups:
+        student = signup.student
+        if student and student.slack_user_id:
+            await send_dm(
+                student.slack_user_id, "Log your volunteer hours",
+                blocks=submission_service.post_shift_blocks(signup, default_hours),
+            )
+            sent += 1
+
+    await audit.record(
+        db, request, "shift.test_prompt",
+        f"Sent test hours prompt for shift {shift_id} to {sent} student(s)",
+        entity_type="shift", entity_id=shift_id,
+    )
+    await db.commit()
+    return RedirectResponse(
+        f"/admin/opportunities/{shift.opportunity_id}/edit?prompt_sent={sent}", status_code=303
+    )
 
 
 @router.post("/shifts/{shift_id}/delete")
@@ -509,6 +738,84 @@ async def admin_submissions_list(
     )
 
 
+@router.get("/submissions/new", response_class=HTMLResponse)
+async def admin_submissions_new_get(request: Request, db: AsyncSession = Depends(get_db)):
+    """Form to add hours manually — e.g. backfilling volunteer time from before the app."""
+    if redirect := _require_auth(request):
+        return redirect
+    students = (
+        await db.execute(
+            select(Student).where(Student.is_active.is_(True)).order_by(Student.name)
+        )
+    ).scalars().all()
+    opps = (
+        await db.execute(
+            select(Opportunity).where(Opportunity.is_active.is_(True)).order_by(Opportunity.name)
+        )
+    ).scalars().all()
+    return templates.TemplateResponse(
+        "admin/submission_new.html",
+        {
+            "request": request,
+            "students": students,
+            "opps": opps,
+            "mentors": await _active_mentors(db),
+            "statuses": list(SubmissionStatus),
+            "today": today_local().isoformat(),
+        },
+    )
+
+
+@router.post("/submissions/new")
+async def admin_submissions_new_post(
+    request: Request,
+    student_id: int = Form(...),
+    hours: float = Form(...),
+    submitted_on: str = Form(""),
+    opportunity_id: Optional[str] = Form(None),
+    reviewer_mentor_id: Optional[str] = Form(None),
+    report: Optional[str] = Form(None),
+    status: str = Form(SubmissionStatus.approved.value),
+    db: AsyncSession = Depends(get_db),
+):
+    if redirect := _require_auth(request):
+        return redirect
+
+    # Date the entry: noon local on the chosen day (avoids tz/day-boundary edges), else now.
+    submitted_at = now_utc()
+    if submitted_on.strip():
+        try:
+            d = date.fromisoformat(submitted_on.strip())
+            submitted_at = local_to_utc(datetime.combine(d, time(12, 0)))
+        except ValueError:
+            pass
+    try:
+        new_status = SubmissionStatus(status)
+    except ValueError:
+        new_status = SubmissionStatus.approved
+
+    submission = await submission_service.create_submission(
+        db,
+        student_id=student_id,
+        opportunity_id=_opt_id(opportunity_id),
+        shift_id=None,
+        hours=hours,
+        report=report.strip() if report else None,
+        reviewer_mentor_id=_opt_id(reviewer_mentor_id),
+        status=new_status,
+        submitted_at=submitted_at,
+    )
+    student = (await db.execute(select(Student).where(Student.id == student_id))).scalars().first()
+    await audit.record(
+        db, request, "submission.add",
+        f"Added {hours:.1f} manual hours ({new_status.value}) for "
+        f"{student.name if student else student_id}",
+        entity_type="submission", entity_id=submission.id,
+    )
+    await db.commit()
+    return RedirectResponse("/admin/submissions?added=1", status_code=303)
+
+
 @router.get("/submissions/{submission_id}/edit", response_class=HTMLResponse)
 async def admin_submissions_edit_get(submission_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     if redirect := _require_auth(request):
@@ -519,6 +826,7 @@ async def admin_submissions_edit_get(submission_id: int, request: Request, db: A
             .options(
                 selectinload(HourSubmission.student),
                 selectinload(HourSubmission.opportunity),
+                selectinload(HourSubmission.shift),
                 selectinload(HourSubmission.reviewer),
             )
             .where(HourSubmission.id == submission_id)
@@ -610,19 +918,29 @@ async def admin_submissions_decision(
     return RedirectResponse(request.headers.get("referer", "/admin/submissions"), status_code=303)
 
 
-# ── Level Requirements ─────────────────────────────────────────────────────────
-
-@router.get("/requirements", response_class=HTMLResponse)
-async def admin_requirements_get(request: Request, db: AsyncSession = Depends(get_db)):
+@router.post("/submissions/{submission_id}/delete")
+async def admin_submissions_delete(submission_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """Permanently delete a submission (e.g. a duplicate or bogus entry)."""
     if redirect := _require_auth(request):
         return redirect
-    reqs = await level_requirements_map(db)
-    rows = [{"level": level, "hours": reqs[level]} for level in StudentLevel]
-    return templates.TemplateResponse(
-        "admin/requirements.html",
-        {"request": request, "rows": rows, "saved": request.query_params.get("saved")},
-    )
+    submission = (
+        await db.execute(
+            select(HourSubmission).options(selectinload(HourSubmission.student)).where(HourSubmission.id == submission_id)
+        )
+    ).scalars().first()
+    if submission:
+        who = submission.student.name if submission.student else "unknown"
+        await audit.record(
+            db, request, "submission.delete",
+            f"Deleted {who}'s submission ({submission.hours:.1f} hrs, {submission.status.value})",
+            entity_type="submission", entity_id=submission_id,
+        )
+        await db.execute(delete(HourSubmission).where(HourSubmission.id == submission_id))
+        await db.commit()
+    return RedirectResponse("/admin/submissions", status_code=303)
 
+
+# ── Level Requirements (managed on the Settings page) ──────────────────────────
 
 @router.post("/requirements")
 async def admin_requirements_post(request: Request, db: AsyncSession = Depends(get_db)):
@@ -646,7 +964,7 @@ async def admin_requirements_post(request: Request, db: AsyncSession = Depends(g
         changes.append(f"{level_label(level)}={hours}")
     await audit.record(db, request, "requirement.set", "Updated level requirements: " + ", ".join(changes), entity_type="requirement")
     await db.commit()
-    return RedirectResponse("/admin/requirements?saved=1", status_code=303)
+    return RedirectResponse("/admin/settings?saved=1", status_code=303)
 
 
 # ── Settings ───────────────────────────────────────────────────────────────────
@@ -655,6 +973,8 @@ async def admin_requirements_post(request: Request, db: AsyncSession = Depends(g
 async def admin_settings_get(request: Request, db: AsyncSession = Depends(get_db)):
     if redirect := _require_auth(request):
         return redirect
+    reqs = await level_requirements_map(db)
+    requirement_rows = [{"level": level, "hours": reqs[level]} for level in StudentLevel]
     return templates.TemplateResponse(
         "admin/settings.html",
         {
@@ -662,6 +982,7 @@ async def admin_settings_get(request: Request, db: AsyncSession = Depends(get_db
             "season_start": await get_season_start(db),
             "timezone": settings.timezone,
             "reminder_lead_hours": settings.reminder_lead_hours,
+            "requirement_rows": requirement_rows,
             "saved": request.query_params.get("saved"),
         },
     )
@@ -793,4 +1114,189 @@ async def admin_audit(request: Request, page: int = 1, db: AsyncSession = Depend
     return templates.TemplateResponse(
         "admin/audit.html",
         {"request": request, "entries": entries, "page": page, "total_pages": total_pages, "total": total},
+    )
+
+
+# ── Report ─────────────────────────────────────────────────────────────────────
+
+def _parse_level(level: Optional[str]) -> Optional[StudentLevel]:
+    try:
+        return StudentLevel(level) if level else None
+    except ValueError:
+        return None
+
+
+@router.get("/report", response_class=HTMLResponse)
+async def admin_report(
+    request: Request,
+    level: Optional[str] = None,
+    show_archived: int = 0,
+    db: AsyncSession = Depends(get_db),
+):
+    if redirect := _require_auth(request):
+        return redirect
+    level_filter = _parse_level(level)
+    rows = await student_progress_report(
+        db, level=level_filter, include_archived=bool(show_archived)
+    )
+    met = sum(1 for r in rows if r["met"])
+    return templates.TemplateResponse(
+        "admin/report.html",
+        {
+            "request": request,
+            "rows": rows,
+            "levels": list(StudentLevel),
+            "current_level": level_filter.value if level_filter else "",
+            "show_archived": bool(show_archived),
+            "met_count": met,
+        },
+    )
+
+
+@router.post("/report/notify")
+async def admin_report_notify(
+    request: Request,
+    level: Optional[str] = None,
+    show_archived: int = 0,
+    db: AsyncSession = Depends(get_db),
+):
+    """DM every active, Slack-linked student the same summary `/vhours` shows them."""
+    if redirect := _require_auth(request):
+        return redirect
+    students = (
+        await db.execute(
+            select(Student).where(
+                Student.is_active.is_(True), Student.slack_user_id.is_not(None)
+            )
+        )
+    ).scalars().all()
+
+    sent = 0
+    for student in students:
+        text = await student_vhours_message(db, student)
+        await send_dm(student.slack_user_id, text)
+        sent += 1
+
+    await audit.record(
+        db, request, "report.notify",
+        f"DMed {sent} student(s) their volunteer-hours summary",
+        entity_type="report",
+    )
+    await db.commit()
+    qs = f"notified={sent}"
+    if level:
+        qs += f"&level={level}"
+    if show_archived:
+        qs += "&show_archived=1"
+    return RedirectResponse(f"/admin/report?{qs}", status_code=303)
+
+
+@router.get("/report/export")
+async def admin_report_export(
+    request: Request,
+    level: Optional[str] = None,
+    show_archived: int = 0,
+    db: AsyncSession = Depends(get_db),
+):
+    if redirect := _require_auth(request):
+        return redirect
+
+    rows = await student_progress_report(
+        db, level=_parse_level(level), include_archived=bool(show_archived)
+    )
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Student", "Level", "Approved Hours", "Projected Hours", "Required Hours",
+        "Remaining", "Percent Complete", "Pending Submissions", "Upcoming Shifts", "Met",
+    ])
+    for r in rows:
+        s = r["student"]
+        writer.writerow([
+            s.name, level_label(s.level), r["approved"], r["projected"], r["required"],
+            r["remaining"], r["pct"], r["pending_count"], r["upcoming_count"],
+            "yes" if r["met"] else "no",
+        ])
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=munus_report.csv"},
+    )
+
+
+# ── Backup / Restore ───────────────────────────────────────────────────────────
+
+@router.get("/backup", response_class=HTMLResponse)
+async def admin_backup_get(request: Request):
+    if redirect := _require_auth(request):
+        return redirect
+
+    from app.services import backup
+    return templates.TemplateResponse(
+        "admin/backup.html",
+        {
+            "request": request,
+            "is_sqlite": backup.is_sqlite(),
+            "backups": backup.list_backups(),
+            "result": request.query_params.get("result"),
+            "message": request.query_params.get("message"),
+        },
+    )
+
+
+@router.get("/backup/download")
+async def admin_backup_download(request: Request):
+    if redirect := _require_auth(request):
+        return redirect
+
+    from app.services import backup
+    if not backup.is_sqlite():
+        return RedirectResponse(
+            "/admin/backup?result=error&message=Not+a+SQLite+database", status_code=303
+        )
+
+    tmp = os.path.join(tempfile.gettempdir(), f"munus-snapshot-{os.getpid()}.db")
+    backup.create_snapshot(tmp)
+    with open(tmp, "rb") as f:
+        data = f.read()
+    os.remove(tmp)
+
+    filename = f"munus-backup-{datetime.now():%Y%m%d-%H%M}.db"
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/backup/restore")
+async def admin_backup_restore(
+    request: Request,
+    file: UploadFile = File(...),
+    confirm: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+):
+    if redirect := _require_auth(request):
+        return redirect
+
+    from app.services import backup
+    if confirm.strip().upper() != "RESTORE":
+        return RedirectResponse(
+            "/admin/backup?result=error&message=Type+RESTORE+to+confirm", status_code=303
+        )
+
+    contents = await file.read()
+    ok, message = backup.stage_restore(contents)
+    if ok:
+        await audit.record(
+            db, request, "backup.restore_staged",
+            f"Staged restore from uploaded file {file.filename}", entity_type="backup",
+        )
+        await db.commit()
+    result = "success" if ok else "error"
+    return RedirectResponse(
+        f"/admin/backup?result={result}&message={message.replace(' ', '+')}",
+        status_code=303,
     )

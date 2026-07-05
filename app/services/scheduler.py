@@ -16,11 +16,13 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models import (
-    HourSubmission, Shift, Signup, SignupStatus, Student,
+    HourSubmission, Shift, Signup, SignupStatus, Student, SubmissionStatus,
 )
+from app.services import submissions
 from app.services.requirements import resolve_required_hours, season_total_hours
 from app.services.slack_client import send_dm
-from app.utils import format_shift_range
+from app.services.student_auth import magic_link
+from app.utils import format_shift_range, shift_length_hours
 
 log = logging.getLogger(__name__)
 
@@ -51,14 +53,17 @@ async def job_shift_reminders() -> None:
             student = signup.student
             shift = signup.shift
             if student.slack_user_id:
-                opp = shift.opportunity.name if shift.opportunity else "Volunteer shift"
-                await send_dm(
-                    student.slack_user_id,
+                o = shift.opportunity
+                opp = o.name if o else "Volunteer shift"
+                text = (
                     f"⏰ *Upcoming Shift Reminder*\n"
                     f"*{opp}*\n{format_shift_range(shift.start_time, shift.end_time)}"
-                    + (f"\nLocation: {shift.opportunity.location}"
-                       if shift.opportunity and shift.opportunity.location else ""),
                 )
+                if o and o.location:
+                    text += f"\nLocation: {o.location}"
+                if o and o.attire:
+                    text += f"\nAttire: {o.attire}"
+                await send_dm(student.slack_user_id, text)
             signup.reminded_at = now
         await db.commit()
     log.info("Shift reminders: processed %d signup(s)", len(signups))
@@ -98,17 +103,97 @@ async def job_post_shift_prompts() -> None:
                 )
             ).scalars().first()
             if not already and student.slack_user_id:
-                opp = shift.opportunity.name if shift.opportunity else "your volunteer shift"
+                default_hours = shift_length_hours(shift.start_time, shift.end_time)
                 await send_dm(
                     student.slack_user_id,
-                    f"📝 *How did it go?*\n"
-                    f"Thanks for volunteering at *{opp}*! "
-                    f"Submit your hours and a short report here: {settings.base_url}/submit",
+                    "Log your volunteer hours",
+                    blocks=submissions.post_shift_blocks(signup, default_hours),
                 )
                 prompted += 1
             signup.prompted_at = now
         await db.commit()
     log.info("Post-shift prompts: sent %d prompt(s)", prompted)
+
+
+async def job_auto_reject_unlogged() -> None:
+    """Auto-reject signed-up shifts a student never logged within AUTO_REJECT_DAYS of the
+    shift ending. Records a rejected HourSubmission so the miss is on file and the shift
+    stops counting toward the student's projected hours. Disabled when AUTO_REJECT_DAYS <= 0.
+    Idempotent: a shift with any existing submission is skipped, so it never double-rejects."""
+    days = settings.auto_reject_days
+    if days <= 0:
+        return
+    now = datetime.utcnow()
+    cutoff = now - timedelta(days=days)
+    async with AsyncSessionLocal() as db:
+        signups = (
+            await db.execute(
+                select(Signup)
+                .options(
+                    selectinload(Signup.student),
+                    selectinload(Signup.shift).selectinload(Shift.opportunity),
+                )
+                .join(Shift, Shift.id == Signup.shift_id)
+                .where(
+                    Signup.status == SignupStatus.signed_up,
+                    Shift.end_time <= cutoff,
+                )
+            )
+        ).scalars().all()
+
+        rejected = 0
+        for signup in signups:
+            student = signup.student
+            shift = signup.shift
+            # Skip if the student already has a submission for this shift (of any status).
+            already = (
+                await db.execute(
+                    select(HourSubmission.id).where(
+                        HourSubmission.student_id == signup.student_id,
+                        HourSubmission.shift_id == shift.id,
+                    )
+                )
+            ).scalars().first()
+            if already:
+                continue
+
+            db.add(HourSubmission(
+                student_id=signup.student_id,
+                opportunity_id=shift.opportunity_id,
+                shift_id=shift.id,
+                hours=shift_length_hours(shift.start_time, shift.end_time),
+                report=None,
+                reviewer_mentor_id=submissions.resolve_reviewer_id(shift),
+                status=SubmissionStatus.rejected,
+                submitted_at=now,
+                reviewed_at=now,
+                review_note=f"Auto-rejected — hours not submitted within {days} days of the shift.",
+            ))
+            rejected += 1
+
+            if student.slack_user_id:
+                o = shift.opportunity
+                opp = o.name if o else "your volunteer shift"
+                await send_dm(
+                    student.slack_user_id,
+                    f"⌛ *Hours window closed — {opp}*\n"
+                    f"{format_shift_range(shift.start_time, shift.end_time)}\n"
+                    f"We didn't get your hours within {days} days, so this shift was closed "
+                    f"out and won't count toward your season total. If you did volunteer, ask "
+                    f"a mentor to add the hours for you.",
+                )
+        await db.commit()
+    log.info("Auto-reject: closed %d unlogged shift(s)", rejected)
+
+
+async def job_nightly_backup() -> None:
+    from app.services.backup import is_sqlite, nightly_backup
+    if not is_sqlite():
+        return
+    try:
+        nightly_backup()
+    except Exception:  # never let a backup failure crash the scheduler
+        log.exception("Backup failed")
 
 
 async def job_weekly_dms() -> None:
@@ -136,6 +221,7 @@ async def job_weekly_dms() -> None:
                 text += "\nYou've met your requirement — nice work! 💪"
             else:
                 text += f"\n_{required - total:.1f} hrs still needed this season._"
+            text += f"\n\n📊 Your dashboard: {magic_link(student.id)}"
             await send_dm(student.slack_user_id, text)
 
 
@@ -154,6 +240,12 @@ def create_scheduler() -> AsyncIOScheduler:
         id="post_shift_prompts",
         replace_existing=True,
     )
+    scheduler.add_job(
+        job_auto_reject_unlogged,
+        IntervalTrigger(hours=6),
+        id="auto_reject_unlogged",
+        replace_existing=True,
+    )
 
     dh, dm_ = settings.weekly_dm_time.split(":")
     scheduler.add_job(
@@ -165,6 +257,14 @@ def create_scheduler() -> AsyncIOScheduler:
             timezone=settings.timezone,
         ),
         id="weekly_dms",
+        replace_existing=True,
+    )
+
+    bh, bm = settings.backup_time.split(":")
+    scheduler.add_job(
+        job_nightly_backup,
+        CronTrigger(day_of_week=settings.backup_day, hour=int(bh), minute=int(bm), timezone=settings.timezone),
+        id="nightly_backup",
         replace_existing=True,
     )
 

@@ -9,16 +9,23 @@ import hashlib
 import hmac
 import json
 import time
+from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.database import get_db
-from app.models import Mentor, Student, SubmissionStatus
+from app.models import (
+    HourSubmission, Mentor, Shift, Signup, SignupStatus, Student, SubmissionStatus,
+)
 from app.services import audit, submissions
-from app.services.requirements import resolve_required_hours, season_total_hours
+from app.services.reports import student_vhours_message
+from app.services.slack_client import open_modal, send_dm
+from app.utils import shift_length_hours
 
 router = APIRouter(prefix="/slack")
 
@@ -77,20 +84,15 @@ async def slack_command(
             media_type="text/plain",
         )
 
-    total = await season_total_hours(db, student.id)
-    required = await resolve_required_hours(db, student.level)
-    on_track = total >= required
-    icon = "✅" if on_track else "⚠️"
-
-    reply = (
-        f"{icon} *Your Volunteer Hours*\n"
-        f"Season total: *{total:.1f} / {required:.1f} hrs*"
-    )
-    if on_track:
-        reply += "\nYou've met your requirement — great work! 💪"
-    else:
-        reply += f"\n_{required - total:.1f} hrs still needed this season._"
-    return Response(content=reply, media_type="text/plain")
+    # Same summary the admin "Notify students" button DMs — built in one place so they match.
+    # Ephemeral response (only the caller sees it); the dashboard link is a plain mrkdwn
+    # hyperlink, not an interactive button, so it never fires an interaction callback.
+    reply = await student_vhours_message(db, student)
+    return JSONResponse({
+        "response_type": "ephemeral",
+        "text": reply,
+        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": reply}}],
+    })
 
 
 # ── Interactive actions handler (Approve / Reject) ─────────────────────────────
@@ -110,21 +112,275 @@ async def slack_interact(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid payload")
 
-    action = payload.get("actions", [{}])[0]
-    action_id = action.get("action_id", "")
-    submission_id_str = action.get("value", "")
-    reviewer_slack_id = payload.get("user", {}).get("id", "")
-    response_url = payload.get("response_url", "")
+    ptype = payload.get("type")
+    acting_slack_id = payload.get("user", {}).get("id", "")
 
-    if action_id not in ("submission_approve", "submission_reject"):
+    # ── Modal submissions ──
+    if ptype == "view_submission":
+        view = payload.get("view", {})
+        cb = view.get("callback_id")
+        if cb == "log_hours":  # student's "Change hours" modal
+            return await _handle_log_hours_submit(db, background_tasks, view, acting_slack_id)
+        if cb == "review_hours":  # mentor's "Edit hours" modal
+            return await _handle_review_edit_submit(db, background_tasks, view, acting_slack_id)
         return Response(status_code=200)
 
+    if ptype != "block_actions":
+        return Response(status_code=200)
+
+    action = payload.get("actions", [{}])[0]
+    action_id = action.get("action_id", "")
+    value = action.get("value", "")
+    response_url = payload.get("response_url", "")
+
+    # ── Student logging hours from the post-shift DM ──
+    if action_id == "hours_quick":
+        return await _handle_quick_log(db, background_tasks, value, acting_slack_id, response_url)
+    if action_id == "hours_adjust":
+        return await _handle_adjust(
+            db, background_tasks, value, acting_slack_id,
+            payload.get("trigger_id", ""), response_url,
+        )
+
+    # ── Mentor editing a submission's hours before deciding ──
+    if action_id == "review_edit":
+        return await _handle_review_edit_open(
+            db, background_tasks, value, acting_slack_id,
+            payload.get("trigger_id", ""), response_url,
+        )
+
+    # ── Mentor approving/rejecting a submission ──
+    if action_id in ("submission_approve", "submission_reject"):
+        return await _handle_review(
+            request, db, background_tasks, action_id, value, acting_slack_id, response_url
+        )
+
+    return Response(status_code=200)
+
+
+# ── /interact helpers ──────────────────────────────────────────────────────────
+
+async def _load_signup(db: AsyncSession, signup_id: int) -> Optional[Signup]:
+    return (
+        await db.execute(
+            select(Signup)
+            .options(
+                selectinload(Signup.student),
+                selectinload(Signup.shift).selectinload(Shift.opportunity),
+            )
+            .where(Signup.id == signup_id)
+        )
+    ).scalars().first()
+
+
+async def _reviewer_name(db: AsyncSession, submission) -> Optional[str]:
+    if submission.reviewer_mentor_id is None:
+        return None
+    m = (
+        await db.execute(select(Mentor).where(Mentor.id == submission.reviewer_mentor_id))
+    ).scalars().first()
+    return m.name if m else None
+
+
+async def _load_submission(db: AsyncSession, submission_id: int) -> Optional[HourSubmission]:
+    return (
+        await db.execute(
+            select(HourSubmission)
+            .options(
+                selectinload(HourSubmission.student),
+                selectinload(HourSubmission.opportunity),
+                selectinload(HourSubmission.shift),
+            )
+            .where(HourSubmission.id == submission_id)
+        )
+    ).scalars().first()
+
+
+async def _is_mentor(db: AsyncSession, acting_slack_id: str) -> bool:
+    """True if the acting Slack user is a known mentor (guards the reviewer-only edit modal)."""
+    if not acting_slack_id:
+        return False
+    m = (
+        await db.execute(select(Mentor).where(Mentor.slack_user_id == acting_slack_id))
+    ).scalars().first()
+    return m is not None
+
+
+def _owns_signup(signup: Optional[Signup], acting_slack_id: str) -> bool:
+    """True only if the acting Slack user is the student the signup belongs to."""
+    return bool(
+        signup
+        and signup.status == SignupStatus.signed_up
+        and signup.student.slack_user_id
+        and signup.student.slack_user_id == acting_slack_id
+    )
+
+
+async def _finish_log(db, background_tasks, signup, submission, notify, already_msg, done_msg):
+    """Shared tail for quick-log and modal-submit: DM reviewer + confirm to the student."""
+    if submission is None:
+        notify(already_msg)
+        return
+    reviewer_name = await _reviewer_name(db, submission)
+    dest = f"sent to {reviewer_name} for approval" if reviewer_name else "sent for review"
+    background_tasks.add_task(submissions.notify_reviewer, submission.id)
+    notify(done_msg(submission, dest))
+
+
+async def _handle_quick_log(db, background_tasks, value, acting_slack_id, response_url):
+    from slack_sdk.webhook.async_client import AsyncWebhookClient
+
+    def reply(text):
+        background_tasks.add_task(
+            AsyncWebhookClient(response_url).send, text=text, replace_original=True
+        )
+
     try:
-        submission_id = int(submission_id_str)
+        signup = await _load_signup(db, int(value))
+    except ValueError:
+        return Response(status_code=200)
+    if not _owns_signup(signup, acting_slack_id):
+        reply("⚠️ Couldn't log those hours.")
+        return Response(status_code=200)
+
+    default_hours = shift_length_hours(signup.shift.start_time, signup.shift.end_time)
+    submission = await submissions.submit_shift_hours(db, signup, default_hours, None)
+    await _finish_log(
+        db, background_tasks, signup, submission, reply,
+        already_msg="✅ You've already logged hours for this shift.",
+        done_msg=lambda s, dest: f"✅ Logged {s.hours:.1f} hrs — {dest}.",
+    )
+    return Response(status_code=200)
+
+
+async def _handle_adjust(db, background_tasks, value, acting_slack_id, trigger_id, response_url):
+    try:
+        signup = await _load_signup(db, int(value))
+    except ValueError:
+        return Response(status_code=200)
+    if not _owns_signup(signup, acting_slack_id) or not trigger_id:
+        return Response(status_code=200)
+    default_hours = shift_length_hours(signup.shift.start_time, signup.shift.end_time)
+    ok = await open_modal(trigger_id, submissions.log_hours_modal(signup, default_hours))
+    if not ok and response_url:
+        # The modal couldn't open (see the server log for Slack's reason). Give the
+        # student a usable fallback rather than a bare Slack error.
+        from slack_sdk.webhook.async_client import AsyncWebhookClient
+        background_tasks.add_task(
+            AsyncWebhookClient(response_url).send,
+            text=(f"⚠️ Couldn't open the hours form. Tap *✅ Log {default_hours:.1f} hrs* "
+                  f"to log the scheduled time, or ask an admin."),
+            replace_original=False,
+        )
+    return Response(status_code=200)
+
+
+async def _handle_log_hours_submit(db, background_tasks, view, acting_slack_id):
+    try:
+        signup_id = int(view.get("private_metadata", ""))
+    except ValueError:
+        return Response(status_code=200)
+
+    values = view.get("state", {}).get("values", {})
+    hours_raw = values.get("hours", {}).get("value", {}).get("value", "")
+    report_raw = values.get("report", {}).get("value", {}).get("value")
+    try:
+        hours = float(hours_raw)
+        if hours <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return JSONResponse({
+            "response_action": "errors",
+            "errors": {"hours": "Enter a positive number of hours."},
+        })
+
+    signup = await _load_signup(db, signup_id)
+    if not _owns_signup(signup, acting_slack_id):
+        return Response(status_code=200)  # close the modal silently
+
+    student_slack = signup.student.slack_user_id
+    submission = await submissions.submit_shift_hours(
+        db, signup, round(hours, 2), report_raw.strip() if report_raw else None
+    )
+
+    def dm(text):
+        background_tasks.add_task(send_dm, student_slack, text)
+
+    await _finish_log(
+        db, background_tasks, signup, submission, dm,
+        already_msg="You've already logged hours for this shift.",
+        done_msg=lambda s, dest: f"✅ Logged {s.hours:.1f} hrs — {dest}.",
+    )
+    return Response(status_code=200)  # empty 200 closes the modal
+
+
+async def _handle_review_edit_open(
+    db, background_tasks, value, acting_slack_id, trigger_id, response_url
+):
+    """Mentor tapped "Edit hours" — open a modal pre-filled with the submission's hours."""
+    try:
+        submission = await _load_submission(db, int(value))
+    except ValueError:
+        return Response(status_code=200)
+    if submission is None or not trigger_id or not await _is_mentor(db, acting_slack_id):
+        return Response(status_code=200)
+
+    ok = await open_modal(trigger_id, submissions.review_hours_modal(submission))
+    if not ok and response_url:
+        from slack_sdk.webhook.async_client import AsyncWebhookClient
+        background_tasks.add_task(
+            AsyncWebhookClient(response_url).send,
+            text=("⚠️ Couldn't open the edit form (see the server log). You can still "
+                  "Approve/Reject here, or edit it in the admin portal."),
+            replace_original=False,
+        )
+    return Response(status_code=200)
+
+
+async def _handle_review_edit_submit(db, background_tasks, view, acting_slack_id):
+    """Mentor submitted the "Edit hours" modal — update the (still pending) submission and
+    re-send the review card with the corrected hours so they can approve/reject it."""
+    try:
+        submission_id = int(view.get("private_metadata", ""))
+    except ValueError:
+        return Response(status_code=200)
+
+    values = view.get("state", {}).get("values", {})
+    hours_raw = values.get("hours", {}).get("value", {}).get("value", "")
+    report_raw = values.get("report", {}).get("value", {}).get("value")
+    try:
+        hours = float(hours_raw)
+        if hours <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return JSONResponse({
+            "response_action": "errors",
+            "errors": {"hours": "Enter a positive number of hours."},
+        })
+
+    if not await _is_mentor(db, acting_slack_id):
+        return Response(status_code=200)  # close the modal silently
+    submission = await _load_submission(db, submission_id)
+    if submission is None:
+        return Response(status_code=200)
+
+    submission.hours = round(hours, 2)
+    if report_raw is not None:
+        submission.report = report_raw.strip() or None
+    await db.commit()
+
+    # Re-send the review card (to the assigned reviewer) reflecting the corrected hours.
+    background_tasks.add_task(submissions.notify_reviewer, submission.id)
+    return Response(status_code=200)  # empty 200 closes the modal
+
+
+async def _handle_review(request, db, background_tasks, action_id, value, reviewer_slack_id, response_url):
+    from slack_sdk.webhook.async_client import AsyncWebhookClient
+
+    try:
+        submission_id = int(value)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid submission id")
-
-    from slack_sdk.webhook.async_client import AsyncWebhookClient
 
     status = (
         SubmissionStatus.approved if action_id == "submission_approve"
@@ -134,8 +390,7 @@ async def slack_interact(
     if submission is None:
         background_tasks.add_task(
             AsyncWebhookClient(response_url).send,
-            text="⚠️ Submission not found.",
-            replace_original=True,
+            text="⚠️ Submission not found.", replace_original=True,
         )
         return Response(status_code=200)
 

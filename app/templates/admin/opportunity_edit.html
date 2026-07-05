@@ -8,6 +8,14 @@
   <a href="/admin/opportunities" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left me-1"></i> Back</a>
 </div>
 
+{% if request.query_params.get('prompt_sent') is not none %}
+<div class="alert alert-success alert-dismissible fade show py-2" role="alert">
+  <i class="bi bi-send me-1"></i>
+  Sent the "log your hours" prompt to {{ request.query_params.get('prompt_sent') }} signed-up student(s) with a Slack ID.
+  <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
 <div class="row g-4">
   <!-- Metadata -->
   <div class="col-lg-5">
@@ -20,6 +28,13 @@
           <div class="mb-3"><label class="form-label">Location</label><input name="location" class="form-control" value="{{ opp.location or '' }}"></div>
           <div class="mb-3"><label class="form-label">Attire</label><input name="attire" class="form-control" value="{{ opp.attire or '' }}"></div>
           <div class="mb-3"><label class="form-label">Contact</label><input name="contact" class="form-control" value="{{ opp.contact or '' }}"></div>
+          <div class="mb-3">
+            <label class="form-label">Default approver <small class="text-muted">(reviews hours unless a shift overrides)</small></label>
+            <select name="reviewer_mentor_id" class="form-select">
+              <option value="">— None (admins review) —</option>
+              {% for m in mentors %}<option value="{{ m.id }}" {% if opp.reviewer_mentor_id == m.id %}selected{% endif %}>{{ m.name }}</option>{% endfor %}
+            </select>
+          </div>
           <button type="submit" class="btn btn-primary w-100">Save Details</button>
         </form>
       </div>
@@ -36,6 +51,13 @@
           <div class="col-md-6"><label class="form-label small">End</label><input type="datetime-local" name="end_time" class="form-control" required></div>
           <div class="col-md-4"><label class="form-label small">Capacity <span class="text-muted">(0 = ∞)</span></label><input type="number" name="capacity" class="form-control" value="0" min="0"></div>
           <div class="col-md-8"><label class="form-label small">Notes</label><input name="notes" class="form-control"></div>
+          <div class="col-md-8">
+            <label class="form-label small">Approver override <span class="text-muted">(blank = opportunity default)</span></label>
+            <select name="reviewer_mentor_id" class="form-select">
+              <option value="">— Use opportunity default —</option>
+              {% for m in mentors %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}
+            </select>
+          </div>
           <div class="col-12"><button type="submit" class="btn btn-primary btn-sm">Add Shift</button></div>
         </form>
       </div>
@@ -46,14 +68,28 @@
       <div class="card-body p-0">
         {% if shifts %}
         <table class="table table-hover mb-0 align-middle">
-          <thead class="table-light"><tr><th>When</th><th>Capacity</th><th>Signed Up</th><th></th></tr></thead>
+          <thead class="table-light"><tr><th>When</th><th>Cap</th><th>Signed Up</th><th>Approver</th><th></th></tr></thead>
           <tbody>
             {% for s in shifts %}
             <tr>
               <td>{{ s.start_time | shiftrange(s.end_time) }}{% if s.notes %}<div class="text-muted small">{{ s.notes }}</div>{% endif %}</td>
               <td>{{ s.capacity if s.capacity else '∞' }}</td>
               <td>{{ counts[s.id] }}</td>
-              <td class="text-end">
+              <td>
+                <form method="post" action="/admin/shifts/{{ s.id }}/reviewer" class="d-flex gap-1">
+                  <select name="reviewer_mentor_id" class="form-select form-select-sm" style="min-width: 9rem;" onchange="this.form.submit()">
+                    <option value="">Default{% if opp.reviewer_mentor_id %} ({{ mentor_names[opp.reviewer_mentor_id] }}){% else %} (admins){% endif %}</option>
+                    {% for m in mentors %}<option value="{{ m.id }}" {% if s.reviewer_mentor_id == m.id %}selected{% endif %}>{{ m.name }}</option>{% endfor %}
+                  </select>
+                </form>
+              </td>
+              <td class="text-end text-nowrap">
+                <form method="post" action="/admin/shifts/{{ s.id }}/send-prompt" class="d-inline"
+                      title="DM the 'log your hours' prompt to signed-up students now (for testing)">
+                  <button class="btn btn-sm btn-outline-primary" {% if not counts[s.id] %}disabled{% endif %}>
+                    <i class="bi bi-send me-1"></i>Prompt
+                  </button>
+                </form>
                 <form method="post" action="/admin/shifts/{{ s.id }}/delete" class="d-inline" onsubmit="return confirm('Delete this shift and its signups?')">
                   <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
                 </form>

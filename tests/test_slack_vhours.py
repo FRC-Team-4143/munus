@@ -35,6 +35,29 @@ async def test_vhours_for_linked_student(client, db, make_student):
     # Freshman requirement default is 5.0; 3 approved hrs -> not yet met.
     assert "3.0 / 5.0" in resp.text
     assert "still needed" in resp.text
+    # Ephemeral response carries a one-tap sign-in link to the dashboard.
+    assert "/enter?token=" in resp.text
+
+
+async def test_vhours_lists_only_upcoming_shifts(client, db, make_student, make_opportunity, make_shift):
+    from app.models import Signup, SignupStatus
+
+    student = await make_student(slack="U0STUDENT")
+    future_opp = await make_opportunity(name="Future Fair")
+    past_opp = await make_opportunity(name="Past Picnic")
+    future = await make_shift(future_opp.id, start_in_hours=48)   # -> listed
+    past = await make_shift(past_opp.id, start_in_hours=-48)      # ended -> not listed
+    db.add_all([
+        Signup(shift_id=future.id, student_id=student.id, status=SignupStatus.signed_up),
+        Signup(shift_id=past.id, student_id=student.id, status=SignupStatus.signed_up),
+    ])
+    await db.commit()
+
+    resp = await _post_vhours(client, "U0STUDENT")
+    assert resp.status_code == 200
+    assert "Upcoming shifts:" in resp.text
+    assert "Future Fair" in resp.text
+    assert "Past Picnic" not in resp.text
 
 
 async def test_vhours_unlinked_user(client):

@@ -113,10 +113,15 @@ class Opportunity(Base):
     )
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    # Default approver for hours logged against this opportunity (a shift can override it).
+    reviewer_mentor_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("mentors.id"), nullable=True
+    )
 
     shifts: Mapped[List["Shift"]] = relationship(
         "Shift", back_populates="opportunity", cascade="all, delete-orphan"
     )
+    reviewer: Mapped[Optional["Mentor"]] = relationship("Mentor")
 
 
 class Shift(Base):
@@ -130,11 +135,16 @@ class Shift(Base):
     end_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)  # naive UTC
     capacity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # 0 = unlimited
     notes: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    # Optional per-shift approver override; NULL means "use the opportunity's reviewer".
+    reviewer_mentor_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("mentors.id"), nullable=True
+    )
 
     opportunity: Mapped["Opportunity"] = relationship("Opportunity", back_populates="shifts")
     signups: Mapped[List["Signup"]] = relationship(
         "Signup", back_populates="shift", cascade="all, delete-orphan"
     )
+    reviewer: Mapped[Optional["Mentor"]] = relationship("Mentor")
 
 
 class Signup(Base):

@@ -12,9 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import HourSubmission, Mentor, Opportunity, Student, SubmissionStatus
+from app.models import (
+    HourSubmission, Mentor, Opportunity, Shift, Signup, SignupStatus, Student,
+    SubmissionStatus,
+)
 from app.services.slack_client import send_dm
-from app.utils import format_shift_range, utc_to_local
+from app.utils import format_shift_range, shift_length_hours, utc_to_local
 
 
 async def create_submission(
@@ -26,8 +29,16 @@ async def create_submission(
     hours: float,
     report: Optional[str],
     reviewer_mentor_id: Optional[int],
+    status: SubmissionStatus = SubmissionStatus.pending,
+    submitted_at: Optional[datetime] = None,
 ) -> HourSubmission:
-    """Create a pending submission and commit it."""
+    """Create a submission and commit it.
+
+    Defaults to a *pending* submission dated now (the normal student/Slack path). Admins
+    backfilling historical hours can pass `status=approved` and a past `submitted_at`; a
+    decided status also stamps `reviewed_at`.
+    """
+    now = datetime.utcnow()
     submission = HourSubmission(
         student_id=student_id,
         opportunity_id=opportunity_id,
@@ -35,13 +46,53 @@ async def create_submission(
         hours=hours,
         report=report,
         reviewer_mentor_id=reviewer_mentor_id,
-        status=SubmissionStatus.pending,
-        submitted_at=datetime.utcnow(),
+        status=status,
+        submitted_at=submitted_at or now,
+        reviewed_at=now if status != SubmissionStatus.pending else None,
     )
     db.add(submission)
     await db.commit()
     await db.refresh(submission)
     return submission
+
+
+def resolve_reviewer_id(shift: Shift) -> Optional[int]:
+    """The mentor who approves hours for a shift: shift override, else opportunity default."""
+    if shift.reviewer_mentor_id is not None:
+        return shift.reviewer_mentor_id
+    if shift.opportunity is not None:
+        return shift.opportunity.reviewer_mentor_id
+    return None
+
+
+async def submit_shift_hours(
+    db: AsyncSession, signup: Signup, hours: float, report: Optional[str]
+) -> Optional[HourSubmission]:
+    """Create a pending submission for a signed-up shift, routing to the resolved reviewer.
+
+    Returns None if the student already has a submission for this shift (idempotent — the
+    student may tap the DM button more than once).
+    """
+    existing = (
+        await db.execute(
+            select(HourSubmission.id).where(
+                HourSubmission.student_id == signup.student_id,
+                HourSubmission.shift_id == signup.shift_id,
+            )
+        )
+    ).scalars().first()
+    if existing:
+        return None
+
+    return await create_submission(
+        db,
+        student_id=signup.student_id,
+        opportunity_id=signup.shift.opportunity_id,
+        shift_id=signup.shift_id,
+        hours=hours,
+        report=report,
+        reviewer_mentor_id=resolve_reviewer_id(signup.shift),
+    )
 
 
 async def set_status(
@@ -116,6 +167,12 @@ def reviewer_blocks(submission: HourSubmission) -> list[dict]:
                 },
                 {
                     "type": "button",
+                    "text": {"type": "plain_text", "text": "✏️ Edit hours"},
+                    "action_id": "review_edit",
+                    "value": str(submission.id),
+                },
+                {
+                    "type": "button",
                     "text": {"type": "plain_text", "text": "🚫 Reject"},
                     "style": "danger",
                     "action_id": "submission_reject",
@@ -124,6 +181,132 @@ def reviewer_blocks(submission: HourSubmission) -> list[dict]:
             ],
         },
     ]
+
+
+def review_hours_modal(submission: HourSubmission) -> dict:
+    """Slack modal for a reviewing mentor to correct a submission's hours (and report)
+    before deciding — the approver-side counterpart to the student's `log_hours_modal`."""
+    opp = submission.opportunity.name if submission.opportunity else "Volunteer work"
+    when = (
+        format_shift_range(submission.shift.start_time, submission.shift.end_time)
+        if submission.shift is not None
+        else utc_to_local(submission.submitted_at).strftime("%b %d")
+    )
+    report_element = {"type": "plain_text_input", "action_id": "value", "multiline": True}
+    if submission.report:
+        report_element["initial_value"] = submission.report
+    return {
+        "type": "modal",
+        "callback_id": "review_hours",
+        "private_metadata": str(submission.id),
+        "title": {"type": "plain_text", "text": "Edit Hours"},
+        "submit": {"type": "plain_text", "text": "Save"},
+        "close": {"type": "plain_text", "text": "Cancel"},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{submission.student.name}* — *{opp}*\n{when}",
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "hours",
+                "label": {"type": "plain_text", "text": "Hours"},
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": "value",
+                    "initial_value": f"{submission.hours:.1f}",
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "report",
+                "optional": True,
+                "label": {"type": "plain_text", "text": "Report (optional)"},
+                "element": report_element,
+            },
+        ],
+    }
+
+
+def post_shift_blocks(signup: Signup, default_hours: float) -> list[dict]:
+    """DM blocks prompting a student to log hours after a shift, with a one-tap default."""
+    shift = signup.shift
+    opp = shift.opportunity.name if shift.opportunity else "your volunteer shift"
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"📝 *Log your hours — {opp}*\n"
+                    f"{format_shift_range(shift.start_time, shift.end_time)}\n"
+                    f"Scheduled: *{default_hours:.1f} hrs*"
+                ),
+            },
+        },
+        {
+            "type": "actions",
+            "block_id": f"posthours_{signup.id}",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": f"✅ Log {default_hours:.1f} hrs"},
+                    "style": "primary",
+                    "action_id": "hours_quick",
+                    "value": str(signup.id),
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "✏️ Change hours"},
+                    "action_id": "hours_adjust",
+                    "value": str(signup.id),
+                },
+            ],
+        },
+    ]
+
+
+def log_hours_modal(signup: Signup, default_hours: float) -> dict:
+    """Slack modal to adjust the logged duration (and add a note) for a shift."""
+    shift = signup.shift
+    opp = shift.opportunity.name if shift.opportunity else "Volunteer shift"
+    return {
+        "type": "modal",
+        "callback_id": "log_hours",
+        "private_metadata": str(signup.id),
+        "title": {"type": "plain_text", "text": "Log Hours"},
+        "submit": {"type": "plain_text", "text": "Submit"},
+        "close": {"type": "plain_text", "text": "Cancel"},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{opp}*\n{format_shift_range(shift.start_time, shift.end_time)}",
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "hours",
+                "label": {"type": "plain_text", "text": "Hours volunteered"},
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": "value",
+                    "initial_value": f"{default_hours:.1f}",
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "report",
+                "optional": True,
+                "label": {"type": "plain_text", "text": "What did you do? (optional)"},
+                "element": {"type": "plain_text_input", "action_id": "value", "multiline": True},
+            },
+        ],
+    }
 
 
 async def notify_reviewer(submission_id: int) -> None:

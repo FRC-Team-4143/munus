@@ -10,11 +10,9 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from itsdangerous import BadSignature, URLSafeSerializer
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from app.config import settings
 from app.database import get_db
 from app.models import (
     HourSubmission, Mentor, Opportunity, Shift, Signup, SignupStatus, Student,
@@ -23,7 +21,13 @@ from app.models import (
 from app.services import opportunities as opp_service
 from app.services import submissions as submission_service
 from app.services.requirements import resolve_required_hours, season_total_hours
-from app.utils import format_shift_range, now_utc, utc_to_local
+from app.services.student_auth import (
+    clear_session_cookie, read_magic_token, safe_next, set_session_cookie,
+    student_id_from_session,
+)
+from app.utils import (
+    format_date_range, format_shift_range, now_utc, shift_length_hours, utc_to_local,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
@@ -34,31 +38,11 @@ templates.env.filters["localdt"] = (
 templates.env.filters["shiftrange"] = lambda s, e=None: format_shift_range(s, e)
 templates.env.filters["levellabel"] = level_label
 
-_signer = URLSafeSerializer(settings.session_secret, salt="student-session")
-_COOKIE = "munus_student"
-
 
 # ── Student identity ───────────────────────────────────────────────────────────
 
-def _set_student_cookie(response, student_id: int) -> None:
-    response.set_cookie(
-        _COOKIE, _signer.dumps(student_id),
-        httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30,
-    )
-
-
-def _student_id_from_cookie(request: Request) -> Optional[int]:
-    token = request.cookies.get(_COOKIE)
-    if not token:
-        return None
-    try:
-        return int(_signer.loads(token))
-    except (BadSignature, ValueError, TypeError):
-        return None
-
-
 async def _current_student(request: Request, db: AsyncSession) -> Optional[Student]:
-    sid = _student_id_from_cookie(request)
+    sid = student_id_from_session(request)
     if sid is None:
         return None
     student = (
@@ -69,14 +53,134 @@ async def _current_student(request: Request, db: AsyncSession) -> Optional[Stude
     return student
 
 
+async def _season_progress(db: AsyncSession, student: Student) -> dict:
+    """Season progress vs the student's level requirement.
+
+    `projected` is a forward-looking estimate that stays stable across a shift's lifecycle:
+    approved hours + any *pending* submission (at its submitted value) + the scheduled length
+    of every signed-up shift the student hasn't logged yet (including ones that have already
+    ended). A shift keeps counting until its hours are approved (then counted at their real
+    value) or rejected (dropped) — so the number never dips in the gap between a shift ending
+    and its approval. `upcoming` (shifts not yet ended) is returned so callers that list them
+    don't have to re-query.
+    """
+    total = await season_total_hours(db, student.id)
+    required = await resolve_required_hours(db, student.level)
+
+    # Pending submissions count toward the projection at their submitted value.
+    pending_hours = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(HourSubmission.hours), 0.0)).where(
+                    HourSubmission.student_id == student.id,
+                    HourSubmission.status == SubmissionStatus.pending,
+                )
+            )
+        ).scalar()
+        or 0.0
+    )
+
+    # Shifts already logged (submission of any status) are counted by their submission, not
+    # their scheduled length — so a rejected shift drops out of the estimate below.
+    logged_shift_ids = set(
+        (
+            await db.execute(
+                select(HourSubmission.shift_id).where(
+                    HourSubmission.student_id == student.id,
+                    HourSubmission.shift_id.is_not(None),
+                )
+            )
+        ).scalars().all()
+    )
+
+    # Every signed-up shift (with its opportunity) — used both to list the upcoming ones and
+    # to estimate the scheduled hours of shifts not yet logged.
+    signups = (
+        await db.execute(
+            select(Signup)
+            .options(selectinload(Signup.shift).selectinload(Shift.opportunity))
+            .join(Shift, Shift.id == Signup.shift_id)
+            .where(
+                Signup.student_id == student.id,
+                Signup.status == SignupStatus.signed_up,
+            )
+            .order_by(Shift.start_time)
+        )
+    ).scalars().all()
+    now = now_utc()
+    upcoming = [su for su in signups if su.shift.end_time >= now]
+    projected = total + pending_hours + sum(
+        shift_length_hours(su.shift.start_time, su.shift.end_time)
+        for su in signups
+        if su.shift_id not in logged_shift_ids
+    )
+
+    def _pct(value: float) -> int:
+        return min(100, round((value / required) * 100)) if required else 100
+
+    return {
+        "total": total,
+        "required": required,
+        "remaining": max(0.0, required - total),
+        "pct": _pct(total),
+        "projected": projected,
+        "projected_pct": _pct(projected),
+        "upcoming": upcoming,
+    }
+
+
 # ── Landing / identify ─────────────────────────────────────────────────────────
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request, db: AsyncSession = Depends(get_db)):
     student = await _current_student(request, db)
-    if student:
-        return RedirectResponse("/opportunities", status_code=303)
-    return templates.TemplateResponse("portal/identify.html", {"request": request})
+    if not student:
+        return templates.TemplateResponse("portal/identify.html", {"request": request})
+
+    progress = await _season_progress(db, student)
+    recent = (
+        await db.execute(
+            select(HourSubmission)
+            .options(
+                selectinload(HourSubmission.opportunity),
+                selectinload(HourSubmission.reviewer),
+            )
+            .where(HourSubmission.student_id == student.id)
+            .order_by(HourSubmission.submitted_at.desc())
+            .limit(5)
+        )
+    ).scalars().all()
+
+    return templates.TemplateResponse(
+        "portal/home.html",
+        {
+            "request": request,
+            "student": student,
+            "progress": progress,
+            "upcoming": progress["upcoming"],
+            "recent": recent,
+        },
+    )
+
+
+@router.get("/enter")
+async def enter(
+    request: Request, token: str = "", next: str = "/", db: AsyncSession = Depends(get_db)
+):
+    """One-tap Slack magic-link sign-in: validate the token, set the session cookie."""
+    sid = read_magic_token(token)
+    if sid is not None:
+        student = (await db.execute(select(Student).where(Student.id == sid))).scalars().first()
+        if student and student.is_active:
+            response = RedirectResponse(safe_next(next), status_code=303)
+            set_session_cookie(response, student.id)
+            return response
+    return templates.TemplateResponse(
+        "portal/identify.html",
+        {"request": request, "error": "That sign-in link is invalid or expired — run "
+                                       "`/vhours` in Slack for a fresh one."},
+        status_code=401,
+    )
 
 
 @router.post("/identify")
@@ -99,15 +203,15 @@ async def identify(
             {"request": request, "error": "That code didn't match an active student."},
             status_code=401,
         )
-    response = RedirectResponse("/opportunities", status_code=303)
-    _set_student_cookie(response, student.id)
+    response = RedirectResponse("/", status_code=303)
+    set_session_cookie(response, student.id)
     return response
 
 
 @router.get("/logout")
 async def logout():
     response = RedirectResponse("/", status_code=303)
-    response.delete_cookie(_COOKIE)
+    clear_session_cookie(response)
     return response
 
 
@@ -129,14 +233,15 @@ async def opportunities_list(request: Request, db: AsyncSession = Depends(get_db
     ).scalars().all()
 
     now = now_utc()
-    cards = [
-        {
+    cards = []
+    for opp in opps:
+        # Shifts that haven't ended yet (upcoming or in progress) — what a student can join.
+        upcoming_shifts = [s for s in opp.shifts if s.end_time >= now]
+        cards.append({
             "opp": opp,
-            # Count shifts that haven't ended yet (upcoming or in progress).
-            "upcoming": sum(1 for s in opp.shifts if s.end_time >= now),
-        }
-        for opp in opps
-    ]
+            "upcoming": len(upcoming_shifts),
+            "date_range": format_date_range(upcoming_shifts),
+        })
     return templates.TemplateResponse(
         "portal/opportunities.html",
         {"request": request, "student": student, "cards": cards},
@@ -311,8 +416,7 @@ async def my_hours(request: Request, db: AsyncSession = Depends(get_db)):
     if not student:
         return RedirectResponse("/", status_code=303)
 
-    total = await season_total_hours(db, student.id)
-    required = await resolve_required_hours(db, student.level)
+    progress = await _season_progress(db, student)
 
     subs = (
         await db.execute(
@@ -331,10 +435,12 @@ async def my_hours(request: Request, db: AsyncSession = Depends(get_db)):
         {
             "request": request,
             "student": student,
-            "total": total,
-            "required": required,
-            "remaining": max(0.0, required - total),
-            "pct": min(100, round((total / required) * 100)) if required else 100,
+            "total": progress["total"],
+            "required": progress["required"],
+            "remaining": progress["remaining"],
+            "pct": progress["pct"],
+            "projected": progress["projected"],
+            "projected_pct": progress["projected_pct"],
             "submissions": subs,
             "message": request.query_params.get("message"),
         },

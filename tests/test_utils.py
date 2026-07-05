@@ -1,6 +1,13 @@
-from datetime import datetime
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 
-from app.utils import local_to_utc, utc_to_local, format_shift_range
+from app.utils import format_date_range, local_to_utc, utc_to_local, format_shift_range
+
+
+def _shift(day, month=7):
+    """A minimal shift-like object (local date at midday) for date-range tests."""
+    start = local_to_utc(datetime(2026, month, day, 12, 0))
+    return SimpleNamespace(start_time=start, end_time=start + timedelta(hours=2))
 
 
 def test_local_utc_roundtrip():
@@ -26,3 +33,10 @@ def test_format_shift_range_same_day():
 def test_format_shift_range_start_only():
     start = local_to_utc(datetime(2026, 7, 4, 9, 0))
     assert "09:00 AM" in format_shift_range(start)
+
+
+def test_format_date_range():
+    assert format_date_range([]) == ""                              # nothing scheduled
+    assert format_date_range([_shift(5)]) == "Jul 05"               # single date
+    # Spans multiple dates -> earliest to latest, unordered input is fine.
+    assert format_date_range([_shift(20, 8), _shift(5)]) == "Jul 05 – Aug 20"

@@ -7,15 +7,25 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h2>Hour Submissions</h2>
-  <form method="get" action="/admin/submissions" class="d-flex gap-2">
-    <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
-      <option value="" {% if not current_status %}selected{% endif %}>All statuses</option>
-      {% for st in statuses %}
-      <option value="{{ st.value }}" {% if current_status == st.value %}selected{% endif %}>{{ st.value | capitalize }}</option>
-      {% endfor %}
-    </select>
-  </form>
+  <div class="d-flex gap-2 align-items-center">
+    <form method="get" action="/admin/submissions">
+      <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+        <option value="" {% if not current_status %}selected{% endif %}>All statuses</option>
+        {% for st in statuses %}
+        <option value="{{ st.value }}" {% if current_status == st.value %}selected{% endif %}>{{ st.value | capitalize }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    <a href="/admin/submissions/new" class="btn btn-sm btn-primary"><i class="bi bi-plus-lg me-1"></i>Add hours</a>
+  </div>
 </div>
+
+{% if request.query_params.get('added') %}
+<div class="alert alert-success alert-dismissible fade show py-2" role="alert">
+  <i class="bi bi-check-circle me-1"></i> Hours added.
+  <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
 
 <div class="card">
   <div class="card-body p-0">
@@ -32,7 +42,13 @@
           <td>{{ s.reviewer.name if s.reviewer else '—' }}</td>
           <td><span class="badge {{ status_badge[s.status.value] }}">{{ s.status.value | capitalize }}</span></td>
           <td class="text-muted small">{{ s.submitted_at | localdt }}</td>
-          <td class="text-end"><a href="/admin/submissions/{{ s.id }}/edit" class="btn btn-sm btn-outline-secondary">Edit</a></td>
+          <td class="text-end text-nowrap">
+            <a href="/admin/submissions/{{ s.id }}/edit" class="btn btn-sm btn-outline-secondary">Edit</a>
+            <form method="post" action="/admin/submissions/{{ s.id }}/delete" class="d-inline"
+                  onsubmit="return confirm('Delete {{ s.student.name }}\'s submission of {{ '%.1f' % s.hours }} hrs? This cannot be undone.')">
+              <button class="btn btn-sm btn-outline-danger" title="Delete submission"><i class="bi bi-trash"></i></button>
+            </form>
+          </td>
         </tr>
         {% endfor %}
         {% if not submissions %}

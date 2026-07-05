@@ -15,23 +15,46 @@
   </div>
 </div>
 
+{% if request.query_params.get('notified') is not none %}
+<div class="alert alert-success alert-dismissible fade show py-2" role="alert">
+  <i class="bi bi-bell me-1"></i>
+  Sent shift reminders to {{ request.query_params.get('notified') }} signed-up student(s) with a Slack ID.
+  <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
 <div class="card">
   <div class="card-body p-0">
     <table class="table table-hover mb-0 align-middle">
-      <thead class="table-light"><tr><th>Name</th><th>Location</th><th>Shifts</th><th></th></tr></thead>
+      <thead class="table-light"><tr><th>Name</th><th>Location</th><th>Dates</th><th>Shifts</th><th></th></tr></thead>
       <tbody>
         {% for o in opps %}
         <tr {% if not o.is_active %}class="table-secondary"{% endif %}>
           <td>{{ o.name }}{% if not o.is_active %}<span class="badge bg-secondary ms-1">Archived</span>{% endif %}</td>
           <td class="text-muted">{{ o.location or '—' }}</td>
+          <td class="text-muted small">{{ o.shifts | daterange or '—' }}</td>
           <td>{{ o.shifts | length }}</td>
-          <td class="text-end">
+          <td class="text-end text-nowrap">
+            {% if o.is_active %}
+            <form method="post" action="/admin/opportunities/{{ o.id }}/notify" class="d-inline"
+                  onsubmit="return confirm('DM everyone signed up for {{ o.name }}\'s upcoming shifts?')">
+              <button class="btn btn-sm btn-outline-primary" title="DM signed-up students about their upcoming shifts">
+                <i class="bi bi-bell me-1"></i>Notify
+              </button>
+            </form>
+            {% endif %}
             <a href="/admin/opportunities/{{ o.id }}/edit" class="btn btn-sm btn-outline-secondary">Edit &amp; Shifts</a>
             <form method="post" action="/admin/opportunities/{{ o.id }}/archive" class="d-inline">
               <button class="btn btn-sm {% if o.is_active %}btn-outline-danger{% else %}btn-outline-success{% endif %}">
                 {{ 'Archive' if o.is_active else 'Restore' }}
               </button>
             </form>
+            {% if not o.is_active %}
+            <form method="post" action="/admin/opportunities/{{ o.id }}/purge" class="d-inline"
+                  onsubmit="return confirm('Permanently delete {{ o.name }}, its shifts, and all hours logged for it? Those hours will be removed from students\' totals. This cannot be undone.')">
+              <button class="btn btn-sm btn-outline-danger" title="Permanently delete this archived opportunity"><i class="bi bi-trash"></i></button>
+            </form>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -52,6 +75,13 @@
           <div class="mb-3"><label class="form-label">Location</label><input name="location" class="form-control"></div>
           <div class="mb-3"><label class="form-label">Attire</label><input name="attire" class="form-control" placeholder="e.g. Team polo & closed-toe shoes"></div>
           <div class="mb-3"><label class="form-label">Contact <small class="text-muted">(optional)</small></label><input name="contact" class="form-control"></div>
+          <div class="mb-3">
+            <label class="form-label">Default approver <small class="text-muted">(mentor who reviews these hours)</small></label>
+            <select name="reviewer_mentor_id" class="form-select">
+              <option value="">— None (admins review) —</option>
+              {% for m in mentors %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}
+            </select>
+          </div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>

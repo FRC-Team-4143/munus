@@ -27,12 +27,29 @@ async def init_db() -> None:
     """Create all tables and seed initial data."""
     from app import models  # noqa: F401 — imported for side-effect (table registration)
 
+    # Apply a staged database restore (if any) before the engine touches the file.
+    from app.services.backup import apply_pending_restore
+    apply_pending_restore()
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Future schema changes: add a `def _migration(conn)` guarded by inspect(conn)
-        # and call it here, mirroring Tempus's hand-rolled migration pattern.
+        # Safe migration: add reviewer_mentor_id to opportunities and shifts if missing.
+        await conn.run_sync(_add_reviewer_columns)
 
     await _seed_level_requirements()
+
+
+def _add_reviewer_columns(conn) -> None:
+    """Add reviewer_mentor_id to opportunities and shifts if not already present."""
+    from sqlalchemy import inspect, text
+    inspector = inspect(conn)
+    for table in ("opportunities", "shifts"):
+        columns = [c["name"] for c in inspector.get_columns(table)]
+        if "reviewer_mentor_id" not in columns:
+            conn.execute(text(
+                f"ALTER TABLE {table} ADD COLUMN reviewer_mentor_id INTEGER "
+                f"REFERENCES mentors(id)"
+            ))
 
 
 async def _seed_level_requirements() -> None:

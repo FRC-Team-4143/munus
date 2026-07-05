@@ -12,17 +12,22 @@ look and feel, but is a fully separate app with its own database, Slack app, and
 
 - **Opportunities & shifts** — admins post opportunities with rich detail (description,
   location, attire, contact); each has one or more dated shifts with a capacity.
-- **Student portal** — students sign in with a personal code, view opportunity details
-  *before* signing up, claim/cancel shifts (capacity-enforced), and track their progress.
-- **Hour submission with approval** — a student submits hours + a short report and picks a
-  reviewing mentor; the mentor gets a Slack DM with **Approve / Reject** buttons; the
-  student is notified of the outcome. Only approved hours count.
+- **Student portal** — one-tap Slack sign-in (or a personal code) to a dashboard, view
+  opportunity details *before* signing up, claim/cancel shifts (capacity-enforced), and
+  track their progress.
+- **Passwordless login** — running `/vhours` returns an "Open my dashboard" link that signs
+  the student in automatically (a signed, 14-day token). Automated DMs carry the same link.
+- **Log hours in Slack** — after a shift ends the student gets a DM to **tap once** to log the
+  scheduled hours (or open a Slack dialog to adjust if it ran long/short) — no site visit. It
+  routes to the shift's approver automatically (per-shift override → opportunity default) for
+  **Approve / Reject**; the student is notified of the outcome. Only approved hours count. A
+  web `/submit` form remains for ad-hoc hours.
 - **Season requirements by level** — Freshman 5 / 4423 Student 10 / 4143 Student 15 hours
   (admin-editable).
 - **Admin UI** — dashboard of pending reviews, full CRUD for students, mentors,
   opportunities/shifts, and submissions (edit faulty entries), CSV import, audit log.
-- **Slack** — `/vhours` for a student's season progress; automatic pre-shift reminders and
-  post-shift "submit your hours" prompts.
+- **Slack** — `/vhours` for a student's season progress + upcoming shifts + a one-tap
+  dashboard link; automatic pre-shift reminders and post-shift "submit your hours" prompts.
 
 ---
 
@@ -80,6 +85,8 @@ at `/home/pi/munus/venv/`. It listens on port **8001** so it can run alongside T
 | `BASE_URL` | `http://localhost:8001` | Public URL used in Slack links |
 | `REMINDER_LEAD_HOURS` | `24` | Hours before a shift to DM signed-up students |
 | `WEEKLY_DM_DAY` / `WEEKLY_DM_TIME` | `6` / `21:00` | Weekly season-progress DM (0=Mon…6=Sun) |
+| `BACKUP_DIR` / `BACKUP_KEEP` | `backups` / `14` | Snapshot directory and how many to retain |
+| `BACKUP_DAY` / `BACKUP_TIME` | `sun` / `23:30` | When the automatic SQLite snapshot runs |
 
 ---
 
@@ -102,11 +109,13 @@ Students and reviewing mentors need their Slack user IDs set in the admin UI to 
 | **Dashboard** | Pending submissions with one-click approve/reject; quick counts |
 | **Opportunities** | Create/edit opportunities (description, location, attire, contact) and manage their shifts (time + capacity) |
 | **Submissions** | Filter by status; edit hours/status/reviewer for faulty entries |
+| **Report** | Roster progress table — approved / **projected** / required hours per student, level filter, CSV export |
 | **Students** | CRUD + CSV import; set level, team, Slack UID; auto portal code |
 | **Mentors** | CRUD; mentors with a Slack UID can review submissions |
 | **Requirements** | Edit required season hours per level |
 | **Import** | Bulk-load students/mentors from CSV |
 | **Audit Log** | Append-only record of every mutation |
+| **Backup** | Download a live SQLite snapshot or stage a restore; automatic rotating snapshots |
 | **Settings** | Season start date |
 
 ---

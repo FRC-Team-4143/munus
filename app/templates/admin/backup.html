@@ -1,0 +1,83 @@
+{% extends "admin/base.html" %}
+{% set active_page = "backup" %}
+{% block title %}Backup — Munus Admin{% endblock %}
+
+{% block content %}
+<h2 class="mb-3">Backup &amp; Restore</h2>
+
+{% if message %}
+<div class="alert alert-{{ 'success' if result == 'success' else 'danger' }} alert-dismissible fade show py-2">
+  {{ message }}
+  <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+{% if not is_sqlite %}
+<div class="alert alert-warning">
+  <i class="bi bi-exclamation-triangle me-1"></i>
+  Backups here are for SQLite databases only. This instance uses a different database —
+  use your database's native backup tooling instead.
+</div>
+{% else %}
+
+<div class="row g-3">
+  <div class="col-md-6">
+    <div class="card h-100">
+      <div class="card-body">
+        <h5 class="card-title"><i class="bi bi-database-down me-1"></i> Download a backup</h5>
+        <p class="text-muted small">
+          Downloads a consistent snapshot of the live database. Keep a copy off the Pi.
+        </p>
+        <a href="/admin/backup/download" class="btn btn-primary">
+          <i class="bi bi-download me-1"></i> Download now
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card h-100 border-danger">
+      <div class="card-body">
+        <h5 class="card-title text-danger"><i class="bi bi-database-up me-1"></i> Restore from a backup</h5>
+        <p class="text-muted small">
+          Replaces the entire database with the uploaded file. The current database is
+          preserved as a safety copy. <strong>Applied on the next app restart.</strong>
+        </p>
+        <form method="post" action="/admin/backup/restore" enctype="multipart/form-data"
+              onsubmit="return confirm('Replace the entire database with this file on next restart?')">
+          <div class="mb-2">
+            <input type="file" name="file" class="form-control" accept=".db" required>
+          </div>
+          <div class="mb-2">
+            <input type="text" name="confirm" class="form-control" placeholder="Type RESTORE to confirm" required>
+          </div>
+          <button class="btn btn-outline-danger">Stage restore</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h5 class="mt-4">Automatic backups</h5>
+<div class="card">
+  <div class="card-body p-0">
+    <table class="table table-sm table-hover mb-0">
+      <thead class="table-light"><tr><th>File</th><th>Size</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for b in backups %}
+        <tr>
+          <td><i class="bi bi-file-earmark-zip me-1"></i>{{ b.name }}</td>
+          <td>{{ b.size_kb }} KB</td>
+          <td class="text-muted small">{{ b.modified.strftime("%Y-%m-%d %I:%M %p") }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3" class="text-center text-muted py-4">
+          No automatic backups yet — they run on a schedule and appear here.
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

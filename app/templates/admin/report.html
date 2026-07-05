@@ -1,0 +1,114 @@
+{% extends "admin/base.html" %}
+{% set active_page = "report" %}
+{% block title %}Report — Munus Admin{% endblock %}
+
+{% block head %}
+<style>
+  .report-table td, .report-table th { white-space: nowrap; vertical-align: middle; }
+  /* Let the Student column absorb the table's slack so the numeric + progress columns
+     stay snug (otherwise the extra width pools in the Progress column and the fixed-width
+     bar floats at its left edge). */
+  .report-table th:first-child, .report-table td:first-child { width: 100%; }
+  .mini-progress { height: 8px; width: 140px; background: #2a1a1a; border-radius: 4px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">Season Progress Report</h2>
+  {% set qs = "" %}
+  {% if current_level %}{% set qs = qs ~ "&level=" ~ current_level %}{% endif %}
+  {% if show_archived %}{% set qs = qs ~ "&show_archived=1" %}{% endif %}
+  <div class="d-flex gap-2">
+    <form method="post" action="/admin/report/notify?{{ qs[1:] }}"
+          onsubmit="return confirm('DM every student with a linked Slack their volunteer-hours summary?')">
+      <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-bell me-1"></i>Notify students</button>
+    </form>
+    <a href="/admin/report/export?{{ qs[1:] }}" class="btn btn-sm btn-outline-primary">
+      <i class="bi bi-download me-1"></i>Export CSV
+    </a>
+  </div>
+</div>
+
+{% if request.query_params.get('notified') is not none %}
+<div class="alert alert-success alert-dismissible fade show py-2" role="alert">
+  <i class="bi bi-bell me-1"></i>
+  Sent volunteer-hours summaries to {{ request.query_params.get('notified') }} student(s) with a linked Slack.
+  <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<!-- Filters -->
+<form method="get" class="row g-2 mb-3 align-items-end">
+  <div class="col-auto">
+    <label class="form-label small mb-1">Level</label>
+    <select name="level" class="form-select form-select-sm" onchange="this.form.submit()">
+      <option value="">All levels</option>
+      {% for l in levels %}
+      <option value="{{ l.value }}" {% if current_level == l.value %}selected{% endif %}>{{ l | levellabel }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-auto">
+    <label class="form-label small mb-1 d-block">&nbsp;</label>
+    <div class="form-check">
+      <input class="form-check-input" type="checkbox" name="show_archived" value="1" id="arch"
+             {% if show_archived %}checked{% endif %} onchange="this.form.submit()">
+      <label class="form-check-label small" for="arch">Include archived</label>
+    </div>
+  </div>
+</form>
+
+{% if not rows %}
+<div class="alert alert-secondary">No students match the selected filters.</div>
+{% else %}
+<div class="card">
+  <div class="card-header d-flex justify-content-between">
+    <span>{{ rows|length }} student{{ 's' if rows|length != 1 else '' }}</span>
+    <span class="text-muted">{{ met_count }}/{{ rows|length }} met requirement</span>
+  </div>
+  <div class="card-body p-0" style="overflow-x: auto;">
+    <table class="table table-hover mb-0 report-table">
+      <thead class="table-light">
+        <tr>
+          <th>Student</th><th>Level</th>
+          <th class="text-end">Approved</th>
+          <th class="text-end">Projected</th>
+          <th class="text-end">Required</th>
+          <th>Progress</th>
+          <th class="text-center">Pending</th>
+          <th class="text-center">Upcoming</th>
+          <th class="text-center">Met</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.student.name }}{% if not r.student.is_active %}<span class="badge bg-secondary ms-1">Archived</span>{% endif %}</td>
+          <td class="text-muted">{{ r.student.level | levellabel }}</td>
+          <td class="text-end fw-semibold">{{ '%.1f' % r.approved }}</td>
+          <td class="text-end">
+            {{ '%.1f' % r.projected }}{% if r.projected > r.approved %}<i class="bi bi-arrow-up-short text-success"></i>{% endif %}
+          </td>
+          <td class="text-end text-muted">{{ '%.1f' % r.required }}</td>
+          <td>
+            <div class="progress mini-progress" title="{{ r.pct }}% approved · {{ r.projected_pct }}% projected">
+              <div class="progress-bar bg-success" style="width: {{ r.pct }}%;"></div>
+              {% if r.projected_pct > r.pct %}
+              <div class="progress-bar bg-success progress-bar-striped" style="width: {{ r.projected_pct - r.pct }}%; opacity:.45;"></div>
+              {% endif %}
+            </div>
+          </td>
+          <td class="text-center">{% if r.pending_count %}<span class="badge bg-warning text-dark">{{ r.pending_count }}</span>{% else %}—{% endif %}</td>
+          <td class="text-center">{% if r.upcoming_count %}<span class="badge bg-secondary">{{ r.upcoming_count }}</span>{% else %}—{% endif %}</td>
+          <td class="text-center">
+            {% if r.met %}<i class="bi bi-check-circle-fill text-success"></i>{% else %}<span class="text-warning">{{ '%.1f' % r.remaining }}h</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
