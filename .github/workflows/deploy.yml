@@ -1,0 +1,31 @@
+name: Deploy
+
+# Deploys to the DigitalOcean droplet by SSHing in and running the apps-infra
+# deploy script (git pull + docker-compose build + up). Runs after the Tests
+# workflow succeeds on main, or on manual dispatch.
+# Requires repo secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY (see apps-infra README).
+
+on:
+  workflow_run:
+    workflows: ["Tests"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Manual runs always deploy; automatic runs only after Tests passed.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: /opt/apps/deploy.sh

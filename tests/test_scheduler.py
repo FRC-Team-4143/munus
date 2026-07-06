@@ -15,7 +15,7 @@ async def test_post_shift_prompt_sends_interactive_dm(
 
     calls = []
 
-    async def fake_send_dm(uid, text, blocks=None):
+    async def fake_send_dm(uid, text, blocks=None, automated=False):
         calls.append((uid, text, blocks))
         return "ts"
 

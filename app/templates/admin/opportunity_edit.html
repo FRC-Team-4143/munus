@@ -15,6 +15,12 @@
   <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
 </div>
 {% endif %}
+{% if request.query_params.get('error') %}
+<div class="alert alert-danger alert-dismissible fade show py-2" role="alert">
+  <i class="bi bi-exclamation-triangle me-1"></i> {{ request.query_params.get('error') }}
+  <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
 
 <div class="row g-4">
   <!-- Metadata -->

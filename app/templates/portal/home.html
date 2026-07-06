@@ -26,12 +26,12 @@
         <div class="progress" role="progressbar" style="height: 10px;">
           <div class="progress-bar bg-success" style="width: {{ progress.pct }}%;"></div>
           {% if progress.projected_pct > progress.pct %}
-          <div class="progress-bar bg-success progress-bar-striped" style="width: {{ progress.projected_pct - progress.pct }}%; opacity: .45;"
+          <div class="progress-bar progress-bar-striped bar-projected" style="width: {{ progress.projected_pct - progress.pct }}%;"
                title="Projected {{ '%.1f' % progress.projected }} hrs with upcoming shifts"></div>
           {% endif %}
         </div>
         {% if progress.projected > progress.total %}
-        <p class="text-muted small mt-2 mb-0">Projected <strong>{{ '%.1f' % progress.projected }} hrs</strong> with your upcoming shifts.</p>
+        <p class="text-muted small mt-2 mb-0">Projected <strong style="color:#7b6cf6;">{{ '%.1f' % progress.projected }} hrs</strong> with your upcoming shifts.</p>
         {% endif %}
       </div>
     </div>

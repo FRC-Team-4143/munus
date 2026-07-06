@@ -76,16 +76,21 @@ Pushing to `main` automatically deploys via GitHub Actions (tests must pass firs
 |---|---|---|
 | `SLACK_BOT_TOKEN` | *(required for Slack)* | Bot OAuth token (`xoxb-...`) |
 | `SLACK_SIGNING_SECRET` | *(required for Slack)* | App signing secret |
+| `SLACK_ANNOUNCE_CHANNEL` | *(blank)* | Channel ID new opportunities are announced in (blank = off) |
 | `ADMIN_PASSWORD` | `changeme` | Password for `/admin` — **change this** |
+| `MANAGER_PASSWORD` | *(blank)* | Optional limited login that can only manage opportunities (blank = disabled) |
 | `SESSION_SECRET` | `dev-secret...` | Secret signing admin/student cookies — **change this** |
 | `DATABASE_URL` | `sqlite+aiosqlite:///./munus.db` | Async SQLAlchemy URL |
 | `TIMEZONE` | `America/New_York` | IANA timezone for scheduling/display |
 | `SEASON_START` | *(blank)* | Count approved hours from this ISO date (blank = all) |
 | `BASE_URL` | `http://localhost:8001` | Public URL used in Slack links |
 | `REMINDER_LEAD_HOURS` | `24` | Hours before a shift to DM signed-up students |
-| `WEEKLY_DM_DAY` / `WEEKLY_DM_TIME` | `6` / `21:00` | Weekly season-progress DM (0=Mon…6=Sun) |
+| `AUTO_REJECT_DAYS` | `7` | Close out a never-logged shift this many days after it ends (0 = off) |
 | `BACKUP_DIR` / `BACKUP_KEEP` | `backups` / `14` | Snapshot directory and how many to retain |
 | `BACKUP_DAY` / `BACKUP_TIME` | `sun` / `23:30` | When the automatic SQLite snapshot runs |
+| `UPDATES_ENABLED` | `true` | Master switch for automated Slack messages and scheduled jobs |
+
+> Most non-secret settings — announce channel, timezone, reminder/auto-reject timing, backup schedule, and the updates toggle — can be edited at runtime from **Admin → Settings**, which writes changes back to `.env` and applies them immediately. API keys/secrets (`SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `ADMIN_PASSWORD`, `MANAGER_PASSWORD`, `SESSION_SECRET`) and deploy-time values (`DATABASE_URL`, `BASE_URL`) are intentionally **not** editable from the UI.
 
 ---
 
@@ -115,7 +120,7 @@ Students and reviewing mentors need their Slack user IDs set in the admin UI to 
 | **Import** | Bulk-load students/mentors from CSV |
 | **Audit Log** | Append-only record of every mutation |
 | **Backup** | Download a live SQLite snapshot or stage a restore; automatic rotating snapshots |
-| **Settings** | Season start date |
+| **Settings** | Live-edit non-secret config — season start, timezone, announce channel, reminder & auto-reject timing, backup schedule, the updates toggle, and per-level season requirements. Changes write back to `.env` and apply immediately |
 
 ---
 
@@ -124,7 +129,3 @@ Students and reviewing mentors need their Slack user IDs set in the admin UI to 
 SQLite by default (`munus.db`). Tables are created on first startup; no manual schema
 steps. To use PostgreSQL, set `DATABASE_URL` to an async URL
 (`postgresql+asyncpg://user:pass@host/db`).
-
-# TODO
-- Make most of the data in .env editable in the settings page like the slack channels used and time configs. I care less about api settings and keys
-- Add CI jobs to redeploy the app rom github actions

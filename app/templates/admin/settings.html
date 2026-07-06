@@ -7,26 +7,105 @@
 
 {% if saved %}
 <div class="alert alert-success alert-dismissible fade show py-2" role="alert">
-  <i class="bi bi-check-circle me-1"></i> Settings saved.
+  <i class="bi bi-check-circle me-1"></i> Settings saved. Changes take effect immediately.
+  <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-danger alert-dismissible fade show py-2" role="alert">
+  <i class="bi bi-exclamation-triangle me-1"></i> {{ error }}
   <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
 </div>
 {% endif %}
 
 <div class="card mb-4" style="max-width: 560px;">
-  <div class="card-header"><i class="bi bi-calendar-range me-1"></i> Season</div>
+  <div class="card-header"><i class="bi bi-gear me-1"></i> General</div>
   <div class="card-body">
+    <p class="text-muted small">
+      These write back to <code>.env</code> and take effect immediately — no restart.
+      API keys and secrets are intentionally not editable here.
+    </p>
+    {% set days = [("mon","Monday"),("tue","Tuesday"),("wed","Wednesday"),("thu","Thursday"),("fri","Friday"),("sat","Saturday"),("sun","Sunday")] %}
     <form method="post" action="/admin/settings">
       <div class="mb-3">
         <label class="form-label">Season start date</label>
         <input type="date" name="season_start" class="form-control" value="{{ season_start.isoformat() if season_start else '' }}">
         <div class="form-text">Approved hours are counted from this date. Leave blank to count all approved hours.</div>
       </div>
+
+      <div class="mb-3">
+        <label class="form-label">Timezone</label>
+        <input type="text" name="timezone" class="form-control" list="tz-list" value="{{ timezone }}" required>
+        <datalist id="tz-list">
+          <option value="America/New_York">
+          <option value="America/Chicago">
+          <option value="America/Denver">
+          <option value="America/Los_Angeles">
+          <option value="America/Phoenix">
+          <option value="America/Anchorage">
+          <option value="Pacific/Honolulu">
+          <option value="UTC">
+        </datalist>
+        <div class="form-text">IANA timezone name used for scheduling and display.</div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Slack announce channel</label>
+        <input type="text" name="slack_announce_channel" class="form-control" value="{{ slack_announce_channel }}" placeholder="e.g. C0ABCDE123">
+        <div class="form-text">Channel ID new opportunities are announced in. Blank = off. The bot must be a member.</div>
+      </div>
+
+      <div class="mb-3 row align-items-center">
+        <label class="col-sm-7 col-form-label">Reminder lead time</label>
+        <div class="col-sm-5 input-group">
+          <input type="number" min="0" step="1" name="reminder_lead_hours" class="form-control" value="{{ reminder_lead_hours }}" required>
+          <span class="input-group-text">hrs before</span>
+        </div>
+        <div class="form-text">DM signed-up students this many hours before their shift.</div>
+      </div>
+
+      <div class="mb-3 row align-items-center">
+        <label class="col-sm-7 col-form-label">Auto-reject unlogged after</label>
+        <div class="col-sm-5 input-group">
+          <input type="number" min="0" step="1" name="auto_reject_days" class="form-control" value="{{ auto_reject_days }}" required>
+          <span class="input-group-text">days</span>
+        </div>
+        <div class="form-text">Close out a never-logged shift this many days after it ends. 0 = off.</div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Weekly backup day</label>
+        <select name="backup_day" class="form-select">
+          {% for value, label in days %}
+          <option value="{{ value }}" {% if backup_day == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Backup time</label>
+        <input type="time" name="backup_time" class="form-control" value="{{ backup_time }}" required>
+      </div>
+
+      <div class="mb-3 row align-items-center">
+        <label class="col-sm-7 col-form-label">Backups to keep</label>
+        <div class="col-sm-5">
+          <input type="number" min="1" step="1" name="backup_keep" class="form-control" value="{{ backup_keep }}" required>
+        </div>
+      </div>
+
+      <div class="mb-3 form-check">
+        <input type="checkbox" class="form-check-input" name="updates_enabled" id="updates_enabled" value="true" {% if updates_enabled %}checked{% endif %}>
+        <label class="form-check-label" for="updates_enabled">Enable automated updates</label>
+        <div class="form-text">Master switch for automated Slack reminders, prompts, and scheduled jobs.</div>
+      </div>
+
       <button type="submit" class="btn btn-primary">Save</button>
     </form>
   </div>
 </div>
 
-<div class="card mb-4" style="max-width: 560px;">
+<div class="card" style="max-width: 560px;">
   <div class="card-header"><i class="bi bi-calendar-check me-1"></i> Season Requirements</div>
   <div class="card-body">
     <p class="text-muted small">Required volunteer hours per student level for the season. Only <strong>approved</strong> submissions count toward these totals.</p>
@@ -42,17 +121,6 @@
       {% endfor %}
       <button type="submit" class="btn btn-primary">Save</button>
     </form>
-  </div>
-</div>
-
-<div class="card" style="max-width: 560px;">
-  <div class="card-header"><i class="bi bi-info-circle me-1"></i> Environment</div>
-  <div class="card-body">
-    <dl class="row mb-0">
-      <dt class="col-sm-6 text-muted">Timezone</dt><dd class="col-sm-6">{{ timezone }}</dd>
-      <dt class="col-sm-6 text-muted">Reminder lead time</dt><dd class="col-sm-6">{{ reminder_lead_hours }} hrs before shift</dd>
-    </dl>
-    <p class="text-muted small mb-0 mt-2">These are set in <code>.env</code> and applied on restart.</p>
   </div>
 </div>
 {% endblock %}

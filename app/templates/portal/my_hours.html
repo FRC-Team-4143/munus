@@ -24,13 +24,13 @@
     <div class="progress" role="progressbar" style="height: 10px;">
       <div class="progress-bar bg-success" style="width: {{ pct }}%;"></div>
       {% if projected_pct > pct %}
-      <div class="progress-bar bg-success progress-bar-striped" style="width: {{ projected_pct - pct }}%; opacity: .45;"
+      <div class="progress-bar progress-bar-striped bar-projected" style="width: {{ projected_pct - pct }}%;"
            title="Projected {{ '%.1f' % projected }} hrs with upcoming shifts"></div>
       {% endif %}
     </div>
     {% if projected > total %}
     <p class="text-muted small mt-2 mb-0">
-      Projected <strong>{{ '%.1f' % projected }} hrs</strong> once you complete your upcoming shifts.
+      Projected <strong style="color:#7b6cf6;">{{ '%.1f' % projected }} hrs</strong> once you complete your upcoming shifts.
       Only <strong>approved</strong> submissions count toward your total.
     </p>
     {% else %}

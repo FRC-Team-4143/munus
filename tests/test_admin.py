@@ -321,3 +321,21 @@ async def test_admin_create_opportunity_and_shift(client):
         "capacity": "6", "notes": "Bring gloves",
     })
     assert resp.status_code == 303
+
+
+async def test_shift_create_rejects_end_before_start(client, db, make_opportunity):
+    """A shift whose end is not after its start is rejected (no row created)."""
+    from sqlalchemy import func
+    from app.models import Shift
+
+    await _login(client)
+    opp = await make_opportunity()
+    resp = await client.post(
+        f"/admin/opportunities/{opp.id}/shifts",
+        data={"start_time": "2026-08-01T15:00", "end_time": "2026-08-01T14:00", "capacity": "0"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert "error=" in resp.headers["location"]
+    count = (await db.execute(select(func.count()).select_from(Shift))).scalar_one()
+    assert count == 0

@@ -4,7 +4,7 @@ Student-facing portal — browse opportunities, sign up for shifts, submit hours
 Lightweight identity: the student enters their code once; it is stored in a signed
 cookie. No passwords — this is a low-stakes internal tool.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
@@ -13,9 +13,10 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.database import get_db
 from app.models import (
-    HourSubmission, Mentor, Opportunity, Shift, Signup, SignupStatus, Student,
+    HourSubmission, Opportunity, Shift, Signup, SignupStatus, Student,
     SubmissionStatus, level_label,
 )
 from app.services import opportunities as opp_service
@@ -235,8 +236,10 @@ async def opportunities_list(request: Request, db: AsyncSession = Depends(get_db
     now = now_utc()
     cards = []
     for opp in opps:
-        # Shifts that haven't ended yet (upcoming or in progress) — what a student can join.
-        upcoming_shifts = [s for s in opp.shifts if s.end_time >= now]
+        # Shifts that aren't fully over yet (upcoming or in progress) — what a student can
+        # join. "Over" = both start and end have passed, so a shift stays visible even if
+        # it has a bad end-before-start time.
+        upcoming_shifts = [s for s in opp.shifts if s.start_time > now or s.end_time > now]
         cards.append({
             "opp": opp,
             "upcoming": len(upcoming_shifts),
@@ -267,10 +270,11 @@ async def opportunity_detail(
         return RedirectResponse("/opportunities", status_code=303)
 
     now = now_utc()
-    # Show shifts that haven't ended yet — a shift in progress is still joinable and
-    # shouldn't disappear the moment it starts.
+    # Show shifts that aren't fully over yet — a shift in progress is still joinable and
+    # shouldn't disappear the moment it starts. "Over" = both start and end have passed.
     shifts = sorted(
-        [s for s in opp.shifts if s.end_time >= now], key=lambda s: s.start_time
+        [s for s in opp.shifts if s.start_time > now or s.end_time > now],
+        key=lambda s: s.start_time,
     )
     # Which of this opportunity's shifts the student is already signed up for.
     my_signups = {
@@ -354,35 +358,64 @@ async def submit_get(request: Request, db: AsyncSession = Depends(get_db)):
     if not student:
         return RedirectResponse("/", status_code=303)
 
-    opps = (
-        await db.execute(
-            select(Opportunity)
-            .options(selectinload(Opportunity.shifts))
-            .where(Opportunity.is_active.is_(True))
-            .order_by(Opportunity.name)
+    # Outstanding shifts: signed up, the shift is fully over (both started AND ended —
+    # guards against shifts with a bad end-before-start time), and not yet logged (no
+    # submission for this student + shift). Mirrors the scheduler's post-shift query.
+    now = now_utc()
+    already_logged = (
+        select(HourSubmission.id)
+        .where(
+            HourSubmission.student_id == student.id,
+            HourSubmission.shift_id == Shift.id,
         )
-    ).scalars().all()
-    mentors = (
+        .correlate(Shift)
+        .exists()
+    )
+    signups = (
         await db.execute(
-            select(Mentor).where(Mentor.is_active.is_(True)).order_by(Mentor.name)
+            select(Signup)
+            .options(selectinload(Signup.shift).selectinload(Shift.opportunity))
+            .join(Shift, Shift.id == Signup.shift_id)
+            .where(
+                Signup.student_id == student.id,
+                Signup.status == SignupStatus.signed_up,
+                Shift.start_time <= now,
+                Shift.end_time <= now,
+                ~already_logged,
+            )
+            .order_by(Shift.end_time)
         )
     ).scalars().all()
 
+    auto_reject_days = settings.auto_reject_days
+    outstanding = []
+    for su in signups:
+        shift = su.shift
+        deadline = None
+        if auto_reject_days > 0:
+            deadline = utc_to_local(shift.end_time + timedelta(days=auto_reject_days))
+        outstanding.append({
+            "signup_id": su.id,
+            "opp_name": shift.opportunity.name if shift.opportunity else "Volunteer shift",
+            "shift": shift,
+            "default_hours": round(shift_length_hours(shift.start_time, shift.end_time), 2),
+            "deadline": deadline,
+        })
+
     return templates.TemplateResponse(
         "portal/submit.html",
-        {"request": request, "student": student, "opps": opps, "mentors": mentors,
+        {"request": request, "student": student, "outstanding": outstanding,
+         "auto_reject_days": auto_reject_days,
          "message": request.query_params.get("message")},
     )
 
 
-@router.post("/submit")
-async def submit_post(
+@router.post("/submit/{signup_id}")
+async def submit_shift(
+    signup_id: int,
     request: Request,
     background_tasks: BackgroundTasks,
     hours: float = Form(...),
-    reviewer_mentor_id: int = Form(...),
-    opportunity_id: Optional[str] = Form(None),
-    shift_id: Optional[str] = Form(None),
     report: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
@@ -390,21 +423,41 @@ async def submit_post(
     if not student:
         return RedirectResponse("/", status_code=303)
 
-    opp_id = int(opportunity_id) if opportunity_id and opportunity_id.strip() else None
-    sh_id = int(shift_id) if shift_id and shift_id.strip() else None
+    signup = (
+        await db.execute(
+            select(Signup)
+            .options(
+                selectinload(Signup.shift).selectinload(Shift.opportunity),
+                selectinload(Signup.student),
+            )
+            .where(Signup.id == signup_id)
+        )
+    ).scalars().first()
+    if (
+        signup is None
+        or signup.student_id != student.id
+        or signup.status != SignupStatus.signed_up
+    ):
+        return RedirectResponse("/submit", status_code=303)
 
-    submission = await submission_service.create_submission(
-        db,
-        student_id=student.id,
-        opportunity_id=opp_id,
-        shift_id=sh_id,
-        hours=hours,
-        report=report.strip() if report else None,
-        reviewer_mentor_id=reviewer_mentor_id,
+    if hours <= 0:
+        return RedirectResponse(
+            "/submit?message=Enter+a+positive+number+of+hours.", status_code=303
+        )
+
+    submission = await submission_service.submit_shift_hours(
+        db, signup, round(hours, 2), report.strip() if report and report.strip() else None
     )
+    if submission is None:
+        return RedirectResponse(
+            "/submit?message=You've+already+logged+hours+for+this+shift.",
+            status_code=303,
+        )
+
     background_tasks.add_task(submission_service.notify_reviewer, submission.id)
     return RedirectResponse(
-        "/my-hours?message=Submitted!+Your+reviewer+has+been+notified.", status_code=303
+        f"/submit?message=Logged+{submission.hours:g}+hrs+for+approval.",
+        status_code=303,
     )
 
 

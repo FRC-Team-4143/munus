@@ -203,9 +203,14 @@ async def job_nightly_backup() -> None:
         log.exception("Backup failed")
 
 
-def create_scheduler() -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler(timezone=settings.timezone)
+def register_jobs(scheduler: AsyncIOScheduler) -> None:
+    """(Re)register all scheduled jobs from the current settings.
 
+    Uses ``replace_existing=True`` so it is safe to call on a running scheduler
+    to apply live changes to the backup schedule / timezone. The interval jobs
+    read ``reminder_lead_hours`` / ``auto_reject_days`` from settings at run
+    time, so those take effect without rescheduling.
+    """
     scheduler.add_job(
         job_shift_reminders,
         IntervalTrigger(minutes=30),
@@ -233,4 +238,19 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
 
+
+def reschedule_all(scheduler) -> None:
+    """Re-apply every job trigger from current settings on a live scheduler.
+
+    Called after settings changes so the new backup schedule / timezone take
+    effect without a restart. No-op if ``scheduler`` is None.
+    """
+    if scheduler is None:
+        return
+    register_jobs(scheduler)
+
+
+def create_scheduler() -> AsyncIOScheduler:
+    scheduler = AsyncIOScheduler(timezone=settings.timezone)
+    register_jobs(scheduler)
     return scheduler

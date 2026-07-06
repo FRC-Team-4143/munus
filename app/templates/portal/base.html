@@ -27,10 +27,18 @@
       --bs-btn-hover-bg: #aa1c00; --bs-btn-hover-border-color: #aa1c00;
       --bs-btn-active-bg: #991900; --bs-btn-active-border-color: #991900;
     }
+    .btn-outline-primary {
+      --bs-btn-color: #e05540; --bs-btn-border-color: #cc2200;
+      --bs-btn-hover-bg: #cc2200; --bs-btn-hover-border-color: #cc2200; --bs-btn-hover-color: #fff;
+      --bs-btn-active-bg: #991900; --bs-btn-active-border-color: #991900; --bs-btn-active-color: #fff;
+    }
     .text-muted { color: #9a7878 !important; }
     .form-control, .form-select { background: #0d0d0d; border-color: #2a1a1a; color: #f0e8e8; }
     .form-control:focus, .form-select:focus { background: #0d0d0d; border-color: #cc2200; color: #f0e8e8; box-shadow: none; }
-    .progress { background: #1a0f0f; }
+    .progress { background: #241818; border: 1px solid #5c4444; }
+    /* Projected (upcoming-shift) hours: a distinct color + stripes so it reads clearly
+       apart from the solid green "earned" hours. */
+    .progress-bar.bar-projected { background-color: #7b6cf6; }
   </style>
   {% block head %}{% endblock %}
 </head>
@@ -48,8 +56,8 @@
       <li class="nav-item"><a class="nav-link {% if active_page == 'submit' %}active{% endif %}" href="/submit">Submit Hours</a></li>
       <li class="nav-item"><a class="nav-link {% if active_page == 'my_hours' %}active{% endif %}" href="/my-hours">My Hours</a></li>
     </ul>
-    <ul class="navbar-nav">
-      {% if student %}<li class="nav-item"><span class="navbar-text me-3">{{ student.name }}</span></li>{% endif %}
+    <ul class="navbar-nav align-items-center">
+      {% if student %}<li class="nav-item"><span class="navbar-text py-0 me-3">{{ student.name }}</span></li>{% endif %}
       <li class="nav-item"><a class="nav-link" href="/logout"><i class="bi bi-box-arrow-right"></i> Sign out</a></li>
     </ul>
   </div>

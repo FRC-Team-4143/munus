@@ -6,66 +6,61 @@
 <h2 class="mb-3">Submit Volunteer Hours</h2>
 {% if message %}<div class="alert alert-info py-2">{{ message }}</div>{% endif %}
 
-<div class="card" style="max-width: 620px;">
+{% if auto_reject_days and auto_reject_days > 0 %}
+<div class="alert alert-warning py-2" style="max-width: 620px;">
+  <i class="bi bi-clock-history me-1"></i>
+  Log your hours within <strong>{{ auto_reject_days }} days</strong> of the activity — after that
+  they're automatically closed out and won't count toward your season total.
+</div>
+{% endif %}
+
+{% if outstanding %}
+<p class="text-muted" style="max-width: 620px;">
+  These shifts have ended and are waiting for you to log hours. The scheduled length is
+  filled in — adjust it if needed. Your shift's mentor is notified automatically to approve.
+</p>
+
+{% for item in outstanding %}
+<div class="card mb-3" style="max-width: 620px;">
   <div class="card-body">
-    <form method="post" action="/submit">
-      <div class="mb-3">
-        <label class="form-label">Opportunity</label>
-        <select name="opportunity_id" id="opp" class="form-select">
-          <option value="">— Not listed / general —</option>
-          {% for o in opps %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}
-        </select>
+    <div class="d-flex justify-content-between align-items-start mb-2">
+      <div>
+        <div class="fw-semibold" style="color: #cc2200;">{{ item.opp_name }}</div>
+        <div class="text-muted small">{{ item.shift.start_time | shiftrange(item.shift.end_time) }}</div>
       </div>
-
-      <div class="mb-3">
-        <label class="form-label">Shift <small class="text-muted">(optional)</small></label>
-        <select name="shift_id" id="shift" class="form-select">
-          <option value="" data-opp="">— No specific shift —</option>
-          {% for o in opps %}{% for s in o.shifts %}
-          <option value="{{ s.id }}" data-opp="{{ o.id }}">{{ o.name }} · {{ s.start_time | shiftrange(s.end_time) }}</option>
-          {% endfor %}{% endfor %}
-        </select>
+      {% if item.deadline %}
+      <div class="text-muted small text-end">log by<br>{{ item.deadline.strftime('%b %d') }}</div>
+      {% endif %}
+    </div>
+    <form method="post" action="/submit/{{ item.signup_id }}">
+      <div class="row g-2 align-items-end">
+        <div class="col-sm-4">
+          <label class="form-label mb-1">Hours</label>
+          <input type="number" step="0.25" min="0.25" name="hours"
+                 value="{{ item.default_hours }}" class="form-control" required>
+        </div>
+        <div class="col-sm-8">
+          <label class="form-label mb-1">Report <small class="text-muted">(optional)</small></label>
+          <input type="text" name="report" class="form-control" placeholder="What did you do?">
+        </div>
       </div>
-
-      <div class="mb-3">
-        <label class="form-label">Hours volunteered</label>
-        <input type="number" step="0.25" min="0" name="hours" class="form-control" required>
-      </div>
-
-      <div class="mb-3">
-        <label class="form-label">Report <small class="text-muted">(what did you do?)</small></label>
-        <textarea name="report" class="form-control" rows="3"></textarea>
-      </div>
-
-      <div class="mb-3">
-        <label class="form-label">Reviewing mentor</label>
-        <select name="reviewer_mentor_id" class="form-select" required>
-          <option value="" disabled selected>— Choose a mentor to approve —</option>
-          {% for m in mentors %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}
-        </select>
-        <div class="form-text">This mentor will get a Slack message to approve your hours.</div>
-      </div>
-
-      <button type="submit" class="btn btn-primary">Submit for approval</button>
+      <button type="submit" class="btn btn-primary btn-sm mt-3">
+        <i class="bi bi-check-lg me-1"></i> Log hours
+      </button>
     </form>
   </div>
 </div>
+{% endfor %}
 
-<script>
-  // Filter the shift dropdown to the selected opportunity.
-  const opp = document.getElementById('opp');
-  const shift = document.getElementById('shift');
-  function syncShifts() {
-    const val = opp.value;
-    for (const o of shift.options) {
-      const oppId = o.getAttribute('data-opp');
-      const show = oppId === '' || oppId === val || val === '';
-      o.hidden = !show;
-    }
-    const cur = shift.selectedOptions[0];
-    if (cur && cur.hidden) shift.value = '';
-  }
-  opp.addEventListener('change', syncShifts);
-  syncShifts();
-</script>
+{% else %}
+<div class="card" style="max-width: 620px;">
+  <div class="card-body text-center py-5">
+    <div class="fs-4 mb-2">🎉 You're all caught up</div>
+    <p class="text-muted mb-3">Nothing waiting to be logged right now.</p>
+    <a href="/opportunities" class="btn btn-outline-primary">
+      <i class="bi bi-megaphone me-1"></i> Find opportunities to sign up for
+    </a>
+  </div>
+</div>
+{% endif %}
 {% endblock %}

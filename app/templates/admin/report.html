@@ -9,7 +9,15 @@
      stay snug (otherwise the extra width pools in the Progress column and the fixed-width
      bar floats at its left edge). */
   .report-table th:first-child, .report-table td:first-child { width: 100%; }
-  .mini-progress { height: 8px; width: 140px; background: #2a1a1a; border-radius: 4px; }
+  .mini-progress { height: 8px; width: 140px; background: #241818; border: 1px solid #5c4444; border-radius: 4px; }
+  /* Projected (upcoming-shift) hours: distinct color + stripes so it reads clearly
+     apart from the solid green "approved" hours. */
+  .progress-bar.bar-projected { background-color: #7b6cf6; }
+  /* Click-to-sort column headers with a direction indicator. */
+  .report-table th.sortable { cursor: pointer; user-select: none; }
+  .report-table th.sortable::after { content: "\2195"; opacity: .55; margin-left: .4em; font-size: 1.2em; }
+  .report-table th.sort-asc::after { content: "\25B2"; opacity: 1; font-size: .9em; color: #e05540; }
+  .report-table th.sort-desc::after { content: "\25BC"; opacity: 1; font-size: .9em; color: #e05540; }
 </style>
 {% endblock %}
 
@@ -71,37 +79,38 @@
     <table class="table table-hover mb-0 report-table">
       <thead class="table-light">
         <tr>
-          <th>Student</th><th>Level</th>
-          <th class="text-end">Approved</th>
-          <th class="text-end">Projected</th>
-          <th class="text-end">Required</th>
+          <th class="sortable" data-type="text">Student</th>
+          <th class="sortable" data-type="text">Level</th>
+          <th class="text-end sortable" data-type="num">Approved</th>
+          <th class="text-end sortable" data-type="num">Projected</th>
+          <th class="text-end sortable" data-type="num">Required</th>
           <th>Progress</th>
           <th class="text-center">Pending</th>
           <th class="text-center">Upcoming</th>
-          <th class="text-center">Met</th>
+          <th class="text-center sortable" data-type="num">Met</th>
         </tr>
       </thead>
       <tbody>
         {% for r in rows %}
         <tr>
-          <td>{{ r.student.name }}{% if not r.student.is_active %}<span class="badge bg-secondary ms-1">Archived</span>{% endif %}</td>
-          <td class="text-muted">{{ r.student.level | levellabel }}</td>
-          <td class="text-end fw-semibold">{{ '%.1f' % r.approved }}</td>
-          <td class="text-end">
+          <td data-sort="{{ r.student.name }}">{{ r.student.name }}{% if not r.student.is_active %}<span class="badge bg-secondary ms-1">Archived</span>{% endif %}</td>
+          <td class="text-muted" data-sort="{{ r.student.level | levellabel }}">{{ r.student.level | levellabel }}</td>
+          <td class="text-end fw-semibold" data-sort="{{ r.approved }}">{{ '%.1f' % r.approved }}</td>
+          <td class="text-end" data-sort="{{ r.projected }}">
             {{ '%.1f' % r.projected }}{% if r.projected > r.approved %}<i class="bi bi-arrow-up-short text-success"></i>{% endif %}
           </td>
-          <td class="text-end text-muted">{{ '%.1f' % r.required }}</td>
-          <td>
+          <td class="text-end text-muted" data-sort="{{ r.required }}">{{ '%.1f' % r.required }}</td>
+          <td data-sort="{{ r.pct }}">
             <div class="progress mini-progress" title="{{ r.pct }}% approved · {{ r.projected_pct }}% projected">
               <div class="progress-bar bg-success" style="width: {{ r.pct }}%;"></div>
               {% if r.projected_pct > r.pct %}
-              <div class="progress-bar bg-success progress-bar-striped" style="width: {{ r.projected_pct - r.pct }}%; opacity:.45;"></div>
+              <div class="progress-bar progress-bar-striped bar-projected" style="width: {{ r.projected_pct - r.pct }}%;"></div>
               {% endif %}
             </div>
           </td>
-          <td class="text-center">{% if r.pending_count %}<span class="badge bg-warning text-dark">{{ r.pending_count }}</span>{% else %}—{% endif %}</td>
-          <td class="text-center">{% if r.upcoming_count %}<span class="badge bg-secondary">{{ r.upcoming_count }}</span>{% else %}—{% endif %}</td>
-          <td class="text-center">
+          <td class="text-center" data-sort="{{ r.pending_count }}">{% if r.pending_count %}<span class="badge bg-warning text-dark">{{ r.pending_count }}</span>{% else %}—{% endif %}</td>
+          <td class="text-center" data-sort="{{ r.upcoming_count }}">{% if r.upcoming_count %}<span class="badge bg-secondary">{{ r.upcoming_count }}</span>{% else %}—{% endif %}</td>
+          <td class="text-center" data-sort="{{ r.remaining if not r.met else 0 }}">
             {% if r.met %}<i class="bi bi-check-circle-fill text-success"></i>{% else %}<span class="text-warning">{{ '%.1f' % r.remaining }}h</span>{% endif %}
           </td>
         </tr>
@@ -110,5 +119,34 @@
     </table>
   </div>
 </div>
+
+<script>
+  // Click a column header to sort the table by that column; click again to reverse.
+  document.querySelectorAll('.report-table th.sortable').forEach(function (th) {
+    th.addEventListener('click', function () {
+      var table = th.closest('table');
+      var tbody = table.querySelector('tbody');
+      var idx = Array.prototype.indexOf.call(th.parentNode.children, th);
+      var numeric = th.dataset.type === 'num';
+      var asc = !th.classList.contains('sort-asc');
+
+      table.querySelectorAll('th.sortable').forEach(function (h) {
+        h.classList.remove('sort-asc', 'sort-desc');
+      });
+      th.classList.add(asc ? 'sort-asc' : 'sort-desc');
+
+      var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr'));
+      rows.sort(function (a, b) {
+        var av = a.children[idx].dataset.sort || '';
+        var bv = b.children[idx].dataset.sort || '';
+        var cmp = numeric
+          ? (parseFloat(av) || 0) - (parseFloat(bv) || 0)
+          : av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' });
+        return asc ? cmp : -cmp;
+      });
+      rows.forEach(function (r) { tbody.appendChild(r); });
+    });
+  });
+</script>
 {% endif %}
 {% endblock %}

@@ -9,6 +9,7 @@ import hmac
 import io
 import logging
 import os
+import re
 import tempfile
 from datetime import date, datetime, time
 from typing import Optional
@@ -609,6 +610,15 @@ async def admin_shift_create(
 ):
     if redirect := _require_auth(request):
         return redirect
+
+    start_dt = local_to_utc(datetime.fromisoformat(start_time))
+    end_dt = local_to_utc(datetime.fromisoformat(end_time))
+    if end_dt <= start_dt:
+        return RedirectResponse(
+            f"/admin/opportunities/{opp_id}/edit?error=Shift+end+time+must+be+after+its+start+time.",
+            status_code=303,
+        )
+
     # Announce the opportunity to Slack when its FIRST shift is added (opportunities are
     # created empty, so this is the moment there's finally something to sign up for).
     is_first_shift = (
@@ -618,8 +628,8 @@ async def admin_shift_create(
     ).scalar() == 0
     db.add(Shift(
         opportunity_id=opp_id,
-        start_time=local_to_utc(datetime.fromisoformat(start_time)),
-        end_time=local_to_utc(datetime.fromisoformat(end_time)),
+        start_time=start_dt,
+        end_time=end_dt,
         capacity=capacity,
         notes=notes.strip() if notes else None,
         reviewer_mentor_id=_opt_id(reviewer_mentor_id),
@@ -980,6 +990,36 @@ async def admin_requirements_post(request: Request, db: AsyncSession = Depends(g
 
 # ── Settings ───────────────────────────────────────────────────────────────────
 
+ENV_PATH = ".env"
+_HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_DAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+
+
+def _write_env(updates: dict[str, str]) -> None:
+    """Upsert KEY=value pairs into .env, preserving other lines."""
+    try:
+        with open(ENV_PATH, "r") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        lines = []
+
+    written: set[str] = set()
+    new_lines = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip().upper()
+        if key in updates:
+            new_lines.append(f"{key}={updates[key]}\n")
+            written.add(key)
+        else:
+            new_lines.append(line)
+    for key, val in updates.items():
+        if key not in written:
+            new_lines.append(f"{key}={val}\n")
+
+    with open(ENV_PATH, "w") as f:
+        f.writelines(new_lines)
+
+
 @router.get("/settings", response_class=HTMLResponse)
 async def admin_settings_get(request: Request, db: AsyncSession = Depends(get_db)):
     if redirect := _require_auth(request):
@@ -991,10 +1031,17 @@ async def admin_settings_get(request: Request, db: AsyncSession = Depends(get_db
         {
             "request": request,
             "season_start": await get_season_start(db),
+            "slack_announce_channel": settings.slack_announce_channel,
             "timezone": settings.timezone,
             "reminder_lead_hours": settings.reminder_lead_hours,
+            "auto_reject_days": settings.auto_reject_days,
+            "backup_day": settings.backup_day,
+            "backup_time": settings.backup_time,
+            "backup_keep": settings.backup_keep,
+            "updates_enabled": settings.updates_enabled,
             "requirement_rows": requirement_rows,
             "saved": request.query_params.get("saved"),
+            "error": request.query_params.get("error"),
         },
     )
 
@@ -1003,10 +1050,20 @@ async def admin_settings_get(request: Request, db: AsyncSession = Depends(get_db
 async def admin_settings_post(
     request: Request,
     season_start: str = Form(""),
+    slack_announce_channel: str = Form(""),
+    timezone: str = Form(...),
+    reminder_lead_hours: int = Form(...),
+    auto_reject_days: int = Form(...),
+    backup_day: str = Form(...),
+    backup_time: str = Form(...),
+    backup_keep: int = Form(...),
+    updates_enabled: bool = Form(False),
     db: AsyncSession = Depends(get_db),
 ):
     if redirect := _require_auth(request):
         return redirect
+
+    # Season start (DB-backed override).
     parsed: Optional[date] = None
     if season_start.strip():
         try:
@@ -1014,8 +1071,85 @@ async def admin_settings_post(
         except ValueError:
             parsed = None
     await set_season_start(db, parsed)
-    await audit.record(db, request, "settings.update", f"Set season start to {parsed or 'all-time'}", entity_type="settings")
+
+    # General config: validate each field, apply the valid ones, write changed
+    # keys to .env once, mirror onto the live singleton, and re-apply the
+    # scheduler (backup schedule / timezone).
+    errors: list[str] = []
+    env_updates: dict[str, str] = {}
+
+    tz = timezone.strip()
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    try:
+        ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError):
+        errors.append(f"Unknown timezone: {tz!r}.")
+    else:
+        if tz != settings.timezone:
+            env_updates["TIMEZONE"] = tz
+            settings.timezone = tz
+
+    day = backup_day.strip().lower()
+    if day not in _DAYS:
+        errors.append("Backup day must be one of mon–sun.")
+    elif day != settings.backup_day:
+        env_updates["BACKUP_DAY"] = day
+        settings.backup_day = day
+
+    bt = backup_time.strip()
+    if not _HHMM_RE.match(bt):
+        errors.append("Backup time must be in HH:MM format.")
+    elif bt != settings.backup_time:
+        env_updates["BACKUP_TIME"] = bt
+        settings.backup_time = bt
+
+    if backup_keep < 1:
+        errors.append("Backups to keep must be at least 1.")
+    elif backup_keep != settings.backup_keep:
+        env_updates["BACKUP_KEEP"] = str(backup_keep)
+        settings.backup_keep = backup_keep
+
+    if reminder_lead_hours < 0:
+        errors.append("Reminder lead time cannot be negative.")
+    elif reminder_lead_hours != settings.reminder_lead_hours:
+        env_updates["REMINDER_LEAD_HOURS"] = str(reminder_lead_hours)
+        settings.reminder_lead_hours = reminder_lead_hours
+
+    if auto_reject_days < 0:
+        errors.append("Auto-reject days cannot be negative.")
+    elif auto_reject_days != settings.auto_reject_days:
+        env_updates["AUTO_REJECT_DAYS"] = str(auto_reject_days)
+        settings.auto_reject_days = auto_reject_days
+
+    channel = slack_announce_channel.strip()
+    if channel != settings.slack_announce_channel:
+        env_updates["SLACK_ANNOUNCE_CHANNEL"] = channel
+        settings.slack_announce_channel = channel
+
+    if updates_enabled != settings.updates_enabled:
+        env_updates["UPDATES_ENABLED"] = "true" if updates_enabled else "false"
+        settings.updates_enabled = updates_enabled
+
+    if env_updates:
+        _write_env(env_updates)
+        from app.services.scheduler import reschedule_all
+        reschedule_all(getattr(request.app.state, "scheduler", None))
+
+    await audit.record(
+        db, request, "settings.update",
+        f"Updated settings (season_start={parsed or 'all-time'}; timezone={settings.timezone}; "
+        f"backup={settings.backup_day} {settings.backup_time} keep={settings.backup_keep}; "
+        f"reminder_lead_hours={settings.reminder_lead_hours}; auto_reject_days={settings.auto_reject_days}; "
+        f"updates_enabled={settings.updates_enabled})",
+        entity_type="settings",
+    )
     await db.commit()
+
+    if errors:
+        from urllib.parse import quote
+        return RedirectResponse(
+            f"/admin/settings?error={quote('; '.join(errors))}", status_code=303
+        )
     return RedirectResponse("/admin/settings?saved=1", status_code=303)
 
 
