@@ -8,7 +8,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import Shift, Signup, SignupStatus
+from app.config import settings
+from app.models import Opportunity, Shift, Signup, SignupStatus
+from app.services.slack_client import post_to_channel
 from app.utils import now_utc
 
 
@@ -83,3 +85,43 @@ async def signup_student(db: AsyncSession, shift: Shift, student_id: int) -> tup
 async def cancel_signup(db: AsyncSession, signup: Signup) -> None:
     signup.status = SignupStatus.cancelled
     await db.commit()
+
+
+def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
+    """Build the (fallback text, blocks) for a new-opportunity channel announcement.
+
+    The button (action_id `opp_dashboard`) carries the opportunity id; when a user clicks it,
+    `/slack/interact` looks them up by Slack id and privately replies with a personal sign-in
+    link — so a single shared button gives each person their own one-tap link."""
+    lines = [f"✨ *New volunteer opportunity: {opp.name}*"]
+    if opp.description:
+        lines.append(opp.description)
+    if opp.location:
+        lines.append(f"📍 {opp.location}")
+    if opp.attire:
+        lines.append(f"👕 {opp.attire}")
+    text = "\n".join(lines)
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "🙋 View & sign up", "emoji": True},
+                    "action_id": "opp_dashboard",
+                    "value": str(opp.id),
+                }
+            ],
+        },
+    ]
+    return text, blocks
+
+
+async def announce_opportunity(opp: Opportunity) -> Optional[str]:
+    """Post a new-opportunity announcement to the configured Slack channel. No-op when
+    SLACK_ANNOUNCE_CHANNEL is blank. Returns the message ts or None."""
+    if not settings.slack_announce_channel:
+        return None
+    text, blocks = opportunity_announcement_blocks(opp)
+    return await post_to_channel(settings.slack_announce_channel, text, blocks=blocks, automated=True)

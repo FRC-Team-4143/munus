@@ -19,6 +19,7 @@ uvicorn app.main:app --reload --port 8001
 
 Requires a `.env` file (see `.env.example`). Key vars: `SLACK_BOT_TOKEN`,
 `SLACK_SIGNING_SECRET`, `ADMIN_PASSWORD`, `SESSION_SECRET`, `BASE_URL`.
+`SLACK_ANNOUNCE_CHANNEL` (optional) enables new-opportunity announcements.
 
 ## Testing
 
@@ -43,7 +44,7 @@ app/
     admin.py         # Password-protected management UI
     slack.py         # /vhours slash command + /interact (approve/reject)
   services/
-    opportunities.py # Shift capacity checks, signup/cancel logic
+    opportunities.py # Shift capacity checks, signup/cancel logic, new-opportunity announce
     submissions.py   # Create submission -> DM reviewer; approve/reject -> notify student
     requirements.py  # Season required hours by level; season-total calc
     reports.py       # Batched roster progress report (approved/projected/required)
@@ -106,6 +107,20 @@ Slack modals/buttons require the app's **Interactivity Request URL** = `/slack/i
 (public host); `views.open` needs a fresh `trigger_id`, so `hours_adjust` opens the modal
 inline (not in a background task).
 
+### New-opportunity announcements
+When the **first shift** is added to an opportunity (`admin_shift_create`), munus posts an
+announcement to `SLACK_ANNOUNCE_CHANNEL` (blank = off; the bot must be in that channel).
+Opportunities are created empty, so the first-shift moment is when there's finally something
+to sign up for. The message (`opportunities.announce_opportunity`) carries a **🙋 View & sign
+up** button (`action_id="opp_dashboard"`, value = opportunity id).
+
+A single channel message can't hold a per-person magic link (the link embeds one
+`student_id`, so everyone would sign in as that student). The **button** solves this: on
+click, `/slack/interact` reads the clicker's Slack id, looks up their `Student`, and replies
+**ephemerally** with a magic link minted for *them*, deep-linked to `/opportunities/{id}` —
+so each person gets their own one-tap sign-in. Unlinked users get an ephemeral "ask an admin"
+note. Same identity trick as `/vhours`.
+
 ### Database migrations
 No Alembic. Add a `def _migration(conn)` guarded by `inspect(conn)` in `database.py` and
 call it from `init_db()`, mirroring Tempus.
@@ -124,7 +139,6 @@ add Bootstrap default light classes.
 | Pre-shift reminders | every 30 min (DMs shifts within `REMINDER_LEAD_HOURS`) |
 | Post-shift submit prompts | every 30 min (DMs after a shift ends, once) |
 | Auto-reject unlogged shifts | every 6 h (records a rejected submission `AUTO_REJECT_DAYS` after a shift ends if the student never logged it; `0` = off) |
-| Weekly season-progress DM | `WEEKLY_DM_DAY` at `WEEKLY_DM_TIME` |
 | Database backup | `BACKUP_DAY` at `BACKUP_TIME` (SQLite snapshot, rotates to `BACKUP_KEEP`) |
 
 ## Backups (`services/backup.py`)

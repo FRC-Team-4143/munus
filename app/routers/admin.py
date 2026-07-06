@@ -29,7 +29,7 @@ from app.models import (
 )
 from app.services import audit, submissions as submission_service
 from app.services.app_settings import get_season_start, set_season_start
-from app.services.opportunities import active_signup_count
+from app.services.opportunities import active_signup_count, announce_opportunity
 from app.services.reports import student_progress_report, student_vhours_message
 from app.services.requirements import level_requirements_map, resolve_required_hours, season_total_hours
 from app.services.slack_client import send_dm
@@ -609,6 +609,13 @@ async def admin_shift_create(
 ):
     if redirect := _require_auth(request):
         return redirect
+    # Announce the opportunity to Slack when its FIRST shift is added (opportunities are
+    # created empty, so this is the moment there's finally something to sign up for).
+    is_first_shift = (
+        await db.execute(
+            select(func.count()).select_from(Shift).where(Shift.opportunity_id == opp_id)
+        )
+    ).scalar() == 0
     db.add(Shift(
         opportunity_id=opp_id,
         start_time=local_to_utc(datetime.fromisoformat(start_time)),
@@ -619,6 +626,10 @@ async def admin_shift_create(
     ))
     await audit.record(db, request, "shift.create", f"Added shift to opportunity {opp_id}", entity_type="shift")
     await db.commit()
+    if is_first_shift and settings.slack_announce_channel:
+        opp = (await db.execute(select(Opportunity).where(Opportunity.id == opp_id))).scalars().first()
+        if opp:
+            await announce_opportunity(opp)
     return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
 
 

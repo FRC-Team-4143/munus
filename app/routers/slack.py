@@ -25,6 +25,7 @@ from app.models import (
 from app.services import audit, submissions
 from app.services.reports import student_vhours_message
 from app.services.slack_client import open_modal, send_dm
+from app.services.student_auth import magic_link
 from app.utils import shift_length_hours
 
 router = APIRouter(prefix="/slack")
@@ -155,6 +156,10 @@ async def slack_interact(
             request, db, background_tasks, action_id, value, acting_slack_id, response_url
         )
 
+    # ── Student opening an opportunity from a channel announcement ──
+    if action_id == "opp_dashboard":
+        return await _handle_opp_dashboard(db, background_tasks, value, acting_slack_id, response_url)
+
     return Response(status_code=200)
 
 
@@ -250,6 +255,39 @@ async def _handle_quick_log(db, background_tasks, value, acting_slack_id, respon
         already_msg="✅ You've already logged hours for this shift.",
         done_msg=lambda s, dest: f"✅ Logged {s.hours:.1f} hrs — {dest}.",
     )
+    return Response(status_code=200)
+
+
+async def _handle_opp_dashboard(db, background_tasks, value, acting_slack_id, response_url):
+    """A student clicked '🙋 View & sign up' on a channel announcement. Slack tells us who
+    clicked, so we privately (ephemeral) reply with THAT student's own one-tap sign-in link,
+    deep-linked to the opportunity — a single shared button gives each person their own link.
+    The link is a plain mrkdwn hyperlink (not a button) so it never fires another interaction."""
+    from slack_sdk.webhook.async_client import AsyncWebhookClient
+
+    def reply(text):
+        background_tasks.add_task(
+            AsyncWebhookClient(response_url).send,
+            text=text,
+            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": text}}],
+            response_type="ephemeral",
+            replace_original=False,
+        )
+
+    try:
+        opp_id = int(value)
+    except ValueError:
+        return Response(status_code=200)
+
+    student = (
+        await db.execute(select(Student).where(Student.slack_user_id == acting_slack_id))
+    ).scalars().first()
+    if not student:
+        reply("❌ Your Slack account isn't linked to a student record — ask an admin to link it.")
+        return Response(status_code=200)
+
+    link = magic_link(student.id, next_path=f"/opportunities/{opp_id}")
+    reply(f"<{link}|🙋 View & sign up>")
     return Response(status_code=200)
 
 

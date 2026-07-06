@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     slack_bot_token: str = ""
     slack_signing_secret: str = ""
 
+    # Channel to announce new opportunities in (Slack channel ID, e.g. C0ABCDE123).
+    # Blank = announcements disabled. The bot must be a member of this channel.
+    slack_announce_channel: str = ""
+
     admin_password: str = "changeme"
     # Optional limited login that can ONLY create/manage opportunities & shifts.
     # Blank = the manager login is disabled.
@@ -31,15 +35,14 @@ class Settings(BaseSettings):
     # (records a rejected submission so it stops counting toward projected hours). 0 = off.
     auto_reject_days: int = 7
 
-    # Weekly season-progress DM
-    weekly_dm_day: int = 6   # 0=Mon ... 6=Sun
-    weekly_dm_time: str = "21:00"  # HH:MM 24h local time
-
     # Database backups (SQLite only)
     backup_dir: str = "backups"
     backup_keep: int = 14  # number of snapshots to retain
     backup_time: str = "23:30"  # HH:MM 24h local time for the weekly snapshot
     backup_day: str = "sun"  # day of week for the weekly backup (mon-sun)
+
+    # Global toggle for all automated updates (Slack messages, reminders, scheduled jobs)
+    updates_enabled: bool = True
 
 
 settings = Settings()

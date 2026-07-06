@@ -58,16 +58,15 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 
 On first start the database is created and the per-level requirements are seeded.
 
-### Run (production — systemd on Raspberry Pi)
+### Run (production — Docker on DigitalOcean)
 
-```bash
-sudo cp munus.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now munus
-```
+The app runs as a Docker container alongside Tempus behind an nginx reverse proxy.
+See the [apps-infra](https://github.com/FRC-Team-4143/apps-infra) repo for the full
+deployment setup and first-time server instructions.
 
-The unit expects user `pi`, working dir `/home/pi/munus`, a `.env` there, and a virtualenv
-at `/home/pi/munus/venv/`. It listens on port **8001** so it can run alongside Tempus.
+Accessible at **http://volunteer.marswars.org**.
+
+Pushing to `main` automatically deploys via GitHub Actions (tests must pass first).
 
 ---
 
@@ -125,3 +124,7 @@ Students and reviewing mentors need their Slack user IDs set in the admin UI to 
 SQLite by default (`munus.db`). Tables are created on first startup; no manual schema
 steps. To use PostgreSQL, set `DATABASE_URL` to an async URL
 (`postgresql+asyncpg://user:pass@host/db`).
+
+# TODO
+- Make most of the data in .env editable in the settings page like the slack channels used and time configs. I care less about api settings and keys
+- Add CI jobs to redeploy the app rom github actions

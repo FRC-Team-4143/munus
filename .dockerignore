@@ -1,0 +1,16 @@
+.env
+*.db
+*.db-shm
+*.db-wal
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tests/
+backups/
+scratch-backups/
+.git/
+.github/
+*.md
+*.service
