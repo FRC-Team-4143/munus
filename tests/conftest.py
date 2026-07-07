@@ -6,6 +6,7 @@ single in-memory connection is shared across the session (in-memory DBs are othe
 per-connection and would appear empty).
 """
 from datetime import datetime, timedelta
+from typing import Optional
 
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -45,15 +46,24 @@ async def db(session_factory) -> AsyncSession:
 
 @pytest_asyncio.fixture
 async def make_student(db):
-    """Factory: make_student(name=..., code=..., level=..., slack=..., active=True)."""
+    """Factory: make_student(name=..., code=..., level=..., slack=..., active=True).
+
+    `code` is stored as `member_code` — the Legion sync key, and what a test's
+    `make_sso_cookie(member_code=...)` must match for `_current_student` to resolve it.
+    """
     async def _make(
         name: str = "Ada Lovelace",
         code: str = "ada00001",
-        level: StudentLevel = StudentLevel.team_4143,
+        level: Optional[StudentLevel] = StudentLevel.team_4143,
+        team_number: Optional[int] = None,
+        grade: Optional[str] = None,
         slack: str | None = None,
         is_active: bool = True,
     ) -> Student:
-        s = Student(name=name, student_code=code, level=level, slack_user_id=slack, is_active=is_active)
+        s = Student(
+            name=name, member_code=code, level=level, team_number=team_number,
+            grade=grade, slack_user_id=slack, is_active=is_active,
+        )
         db.add(s)
         await db.commit()
         await db.refresh(s)
@@ -63,8 +73,11 @@ async def make_student(db):
 
 @pytest_asyncio.fixture
 async def make_mentor(db):
-    async def _make(name: str = "Coach Ray", slack: str | None = "U0MENTOR") -> Mentor:
-        m = Mentor(name=name, slack_user_id=slack)
+    async def _make(
+        name: str = "Coach Ray", slack: str | None = "U0MENTOR",
+        code: str | None = None, is_active: bool = True,
+    ) -> Mentor:
+        m = Mentor(name=name, slack_user_id=slack, member_code=code, is_active=is_active)
         db.add(m)
         await db.commit()
         await db.refresh(m)
@@ -115,3 +128,35 @@ async def client(session_factory):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
     app.dependency_overrides.clear()
+
+
+def make_sso_cookie(
+    groups=("munus-admin",), *, name="Test Admin", username="test.admin",
+    role="mentor", member_code="test0001", team_number=4143, slack_user_id=None,
+):
+    """Mint a valid `mw_sso` cookie value for tests, mirroring Legion's `make_sso_token`.
+    Uses the app's own `sso_secret`, so `read_sso_token` verifies it. `role="student"` +
+    a `member_code` matching a `make_student(code=...)` row is what the portal resolves
+    `_current_student` from."""
+    from itsdangerous import URLSafeTimedSerializer
+    from app.config import settings
+
+    signer = URLSafeTimedSerializer(settings.sso_secret, salt="mw-sso")
+    return signer.dumps({
+        "member_code": member_code,
+        "username": username,
+        "name": name,
+        "role": role,
+        "team_number": team_number,
+        "groups": list(groups),
+        "slack_user_id": slack_user_id,
+    })
+
+
+@pytest_asyncio.fixture
+async def authed_client(client):
+    """An httpx client carrying a valid `mw_sso` cookie in the `munus-admin` group."""
+    from app.services.sso import SSO_COOKIE
+
+    client.cookies.set(SSO_COOKIE, make_sso_cookie())
+    return client

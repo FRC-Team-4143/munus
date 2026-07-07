@@ -1,0 +1,17 @@
+{% extends "portal/base.html" %}
+{% block title %}Sign-in unavailable — Munus{% endblock %}
+{% block nav %}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-center" style="min-height: 70vh;">
+  <div class="card" style="width: 380px;">
+    <div class="card-body p-4 text-center">
+      <h1 class="mb-1" style="color:#cc2200; font-style:italic; font-weight:700;">Munus</h1>
+      <div class="alert alert-danger text-start mt-3 mb-0">
+        Sign-in is temporarily unavailable — Legion couldn't be reached. Try again in a
+        minute, or ask an admin if this keeps happening.
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

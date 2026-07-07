@@ -25,7 +25,6 @@ from app.models import (
 from app.services import audit, submissions
 from app.services.reports import student_vhours_message
 from app.services.slack_client import open_modal, send_dm
-from app.services.student_auth import magic_link
 from app.utils import shift_length_hours
 
 router = APIRouter(prefix="/slack")
@@ -286,7 +285,8 @@ async def _handle_opp_dashboard(db, background_tasks, value, acting_slack_id, re
         reply("❌ Your Slack account isn't linked to a student record — ask an admin to link it.")
         return Response(status_code=200)
 
-    link = magic_link(student.id, next_path=f"/opportunities/{opp_id}")
+    from urllib.parse import quote
+    link = f"{settings.base_url}/enter?member={student.member_code}&next={quote(f'/opportunities/{opp_id}')}"
     reply(f"<{link}|🙋 View & sign up>")
     return Response(status_code=200)
 

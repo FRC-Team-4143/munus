@@ -60,12 +60,19 @@ class Student(Base):
     __tablename__ = "students"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    student_code: Mapped[Optional[str]] = mapped_column(String(8), unique=True, nullable=True, index=True)
+    # Legion's stable sync key (see services/legion_sync.py). Nullable only so old rows
+    # from before the Legion rework can exist transiently until the first sync back-links
+    # them by slack_user_id/name.
+    member_code: Mapped[Optional[str]] = mapped_column(String(8), unique=True, nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    level: Mapped[StudentLevel] = mapped_column(
-        SAEnum(StudentLevel), nullable=False, default=StudentLevel.freshman
-    )
+    # Requirement pool — derived from the synced grade+team on every sync
+    # (services.requirements.derive_level), not admin-set. Null for alumni/no-grade
+    # (excluded from level-based reporting; see derive_level's docstring).
+    level: Mapped[Optional[StudentLevel]] = mapped_column(SAEnum(StudentLevel), nullable=True)
     team_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Raw Legion school-year grade, synced for display only (services/roster.py);
+    # `level` above is the derived, queryable value used everywhere else.
+    grade: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     slack_user_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="1"
@@ -83,6 +90,7 @@ class Mentor(Base):
     __tablename__ = "mentors"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    member_code: Mapped[Optional[str]] = mapped_column(String(8), unique=True, nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     slack_user_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     is_active: Mapped[bool] = mapped_column(

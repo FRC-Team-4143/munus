@@ -1,0 +1,94 @@
+{% extends "admin/base.html" %}
+{% set active_page = "roster" %}
+{% block title %}Roster — Munus Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <h2 class="mb-0">Roster</h2>
+  <div class="d-flex gap-2 flex-wrap">
+    {% if show_archived %}
+    <a href="/admin/roster" class="btn btn-outline-secondary btn-sm"><i class="bi bi-eye-slash me-1"></i> Hide Archived</a>
+    {% else %}
+    <a href="/admin/roster?show_archived=1" class="btn btn-outline-secondary btn-sm"><i class="bi bi-archive me-1"></i> Show Archived</a>
+    {% endif %}
+    {% if legion_base_url %}
+    <a class="btn btn-outline-light btn-sm" href="{{ legion_base_url }}/admin" target="_blank">
+      <i class="bi bi-box-arrow-up-right me-1"></i> Manage in Legion
+    </a>
+    {% endif %}
+    <form method="post" action="/admin/roster/sync" class="d-inline">
+      <button class="btn btn-primary btn-sm"><i class="bi bi-arrow-repeat me-1"></i> Sync now</button>
+    </form>
+  </div>
+</div>
+
+<p class="text-muted small">
+  The roster is owned by <strong>Legion</strong> and synced in here — Munus can't add,
+  edit, or remove members. Make changes in Legion, then <em>Sync now</em>. Season
+  requirement pools (Level) are derived automatically from each student's Legion grade
+  and team.
+  {% if last_synced %}<br>Last synced: <code>{{ last_synced }}</code> (UTC).{% else %}<br><em>Never synced.</em>{% endif %}
+</p>
+
+{% if synced %}
+<div class="alert alert-success py-2">Synced: {{ synced }}</div>
+{% endif %}
+{% if sync_error %}
+<div class="alert alert-danger py-2">Sync failed: {{ sync_error }}</div>
+{% endif %}
+
+<ul class="nav nav-tabs mb-3" role="tablist">
+  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#students-tab">Students ({{ students|length }})</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#mentors-tab">Mentors ({{ mentors|length }})</button></li>
+</ul>
+
+<div class="tab-content">
+  <div class="tab-pane fade show active" id="students-tab">
+    <div class="card">
+      <div class="card-body p-0">
+        <table class="table table-hover mb-0 align-middle">
+          <thead class="table-light">
+            <tr><th>Name</th><th>Level</th><th>Grade</th><th>Team</th><th>Slack</th><th>Linked</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            {% for s in students %}
+            <tr {% if not s.is_active %}class="table-secondary"{% endif %}>
+              <td>{{ s.name }}</td>
+              <td>{{ s.level | levellabel }}</td>
+              <td>{{ s.grade or '—' }}</td>
+              <td>{{ s.team_number or '—' }}</td>
+              <td>{{ '✓' if s.slack_user_id else '—' }}</td>
+              <td>{% if s.member_code %}<span class="badge bg-success">Legion</span>{% else %}<span class="badge bg-secondary">legacy</span>{% endif %}</td>
+              <td>{{ 'Active' if s.is_active else 'Archived' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="text-muted text-center">No students. Run a sync.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="tab-pane fade" id="mentors-tab">
+    <div class="card">
+      <div class="card-body p-0">
+        <table class="table table-hover mb-0 align-middle">
+          <thead class="table-light"><tr><th>Name</th><th>Slack</th><th>Linked</th><th>Status</th></tr></thead>
+          <tbody>
+            {% for m in mentors %}
+            <tr {% if not m.is_active %}class="table-secondary"{% endif %}>
+              <td>{{ m.name }}</td>
+              <td>{{ '✓' if m.slack_user_id else '—' }}</td>
+              <td>{% if m.member_code %}<span class="badge bg-success">Legion</span>{% else %}<span class="badge bg-secondary">legacy</span>{% endif %}</td>
+              <td>{{ 'Active' if m.is_active else 'Archived' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-muted text-center">No mentors. Run a sync.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -20,6 +20,19 @@ def _client_ip(request: Optional[Request]) -> Optional[str]:
     return request.client.host
 
 
+def _actor_from_request(request: Optional[Request]) -> str:
+    """The signed-in admin/manager's identity for the actor column: their SSO username
+    (or name), falling back to "system" when there's no verified identity (e.g.
+    scheduled jobs)."""
+    if request is None:
+        return "system"
+    from app.services.sso import sso_identity
+    identity = sso_identity(request)
+    if identity is None:
+        return "system"
+    return identity.get("username") or identity.get("name") or "system"
+
+
 async def record(
     db: AsyncSession,
     request: Optional[Request],
@@ -29,16 +42,17 @@ async def record(
     entity_type: Optional[str] = None,
     entity_id: Optional[Any] = None,
     detail: Optional[dict] = None,
-    actor: str = "admin",
+    actor: Optional[str] = None,
 ) -> None:
     """Stage an audit row on the session (does not commit).
 
     `action` is a dotted verb like "submission.approve"; `detail` is an optional dict
-    serialized to JSON.
+    serialized to JSON. `actor` defaults to the SSO identity on the request (see
+    `_actor_from_request`).
     """
     db.add(AuditLog(
         timestamp=datetime.utcnow(),
-        actor=actor,
+        actor=actor or _actor_from_request(request),
         ip=_client_ip(request),
         action=action,
         entity_type=entity_type,

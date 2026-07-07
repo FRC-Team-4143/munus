@@ -10,6 +10,7 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models import (
     HourSubmission, Shift, Signup, SignupStatus, Student, StudentLevel, SubmissionStatus,
 )
@@ -18,7 +19,6 @@ from app.services.opportunities import upcoming_signups_for_student
 from app.services.requirements import (
     level_requirements_map, resolve_required_hours, season_total_hours,
 )
-from app.services.student_auth import magic_link
 from app.utils import format_shift_range, now_utc, shift_length_hours
 
 
@@ -174,6 +174,9 @@ async def student_vhours_message(db: AsyncSession, student: Student) -> str:
             opp = su.shift.opportunity.name if su.shift.opportunity else "Volunteer shift"
             reply += f"\n• {opp} — {format_shift_range(su.shift.start_time, su.shift.end_time)}"
 
-    # A plain mrkdwn hyperlink (not an interactive button) so it just opens the URL.
-    reply += f"\n\n<{magic_link(student.id)}|📊 Open my dashboard>"
+    # A plain mrkdwn hyperlink (not an interactive button) so it just opens the URL. No
+    # Legion round trip happens here — /enter (services/legion_auth.py) only starts a
+    # challenge if the click actually needs one (see its docstring).
+    dashboard_url = f"{settings.base_url}/enter?member={student.member_code}"
+    reply += f"\n\n<{dashboard_url}|📊 Open my dashboard>"
     return reply

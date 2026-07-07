@@ -1,11 +1,7 @@
 """
-Admin routes — password-protected web UI.
-
-Auth: session cookie signed with itsdangerous.
+Admin routes — Legion-SSO-gated management UI.
 """
 import csv
-import hashlib
-import hmac
 import io
 import logging
 import os
@@ -17,7 +13,6 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -34,6 +29,7 @@ from app.services.opportunities import active_signup_count, announce_opportunity
 from app.services.reports import student_progress_report, student_vhours_message
 from app.services.requirements import level_requirements_map, resolve_required_hours, season_total_hours
 from app.services.slack_client import send_dm
+from app.services.sso import logout_url, make_authorize_url, sso_identity
 from app.utils import (
     format_date_range, format_shift_range, local_to_utc, now_utc, shift_length_hours,
     today_local, utc_to_local,
@@ -50,14 +46,6 @@ templates.env.filters["shiftrange"] = lambda s, e=None: format_shift_range(s, e)
 templates.env.filters["daterange"] = format_date_range
 templates.env.filters["levellabel"] = level_label
 
-_signer = URLSafeTimedSerializer(settings.session_secret, salt="admin-session")
-_COOKIE = "admin_session"
-_MAX_AGE = 60 * 60 * 12  # 12 hours
-
-
-def _student_code(name: str) -> str:
-    return hashlib.sha256(name.strip().lower().encode()).hexdigest()[:8]
-
 
 def _opt_id(raw: Optional[str]) -> Optional[int]:
     """Parse an optional integer form field (e.g. a mentor dropdown), '' -> None."""
@@ -69,21 +57,14 @@ async def _active_mentors(db: AsyncSession):
 
 
 # ── Auth helpers ───────────────────────────────────────────────────────────────
+#
+# /admin is gated by Legion SSO: the shared `mw_sso` cookie must carry the `munus-admin`
+# or `munus-manager` group. There is no local password — Legion mints the cookie, Munus
+# only verifies it (services/sso.py). The first admin is granted `munus-admin` in
+# Legion's /admin/groups.
 
-def _role(request: Request) -> Optional[str]:
-    """The signed-in role from the session cookie: 'admin', 'manager', or None."""
-    token = request.cookies.get(_COOKIE)
-    if not token:
-        return None
-    try:
-        value = _signer.loads(token, max_age=_MAX_AGE)
-    except (BadSignature, SignatureExpired):
-        return None
-    return value if value in ("admin", "manager") else "admin"  # legacy tokens = admin
-
-
-def _is_authenticated(request: Request) -> bool:
-    return _role(request) is not None
+_ADMIN_GROUP = "munus-admin"
+_MANAGER_GROUP = "munus-manager"
 
 
 def _manager_allowed(path: str) -> bool:
@@ -97,60 +78,55 @@ def _manager_allowed(path: str) -> bool:
 
 
 def _require_auth(request: Request):
-    """Gate every admin route. Admins pass everywhere; a manager only on opportunity/shift
-    paths (otherwise bounced to their Opportunities page); anonymous users to the login."""
-    role = _role(request)
-    if role is None:
-        return RedirectResponse("/admin/login", status_code=303)
-    if role == "admin" or _manager_allowed(request.url.path):
+    """Gate every admin route via Legion SSO. `munus-admin` passes everywhere;
+    `munus-manager` only on opportunity/shift paths (otherwise bounced to their
+    Opportunities page); no/invalid cookie -> Legion sign-in; signed in but holding
+    neither group -> 403."""
+    identity = sso_identity(request)
+    if identity is None:
+        return RedirectResponse(make_authorize_url(request), status_code=303)
+    groups = set(identity.get("groups") or [])
+    if _ADMIN_GROUP in groups:
         return None
-    return RedirectResponse("/admin/opportunities", status_code=303)
+    if _MANAGER_GROUP in groups:
+        if _manager_allowed(request.url.path):
+            return None
+        return RedirectResponse("/admin/opportunities", status_code=303)
+    return templates.TemplateResponse(
+        "admin/forbidden.html",
+        {"request": request, "name": identity.get("name", "")},
+        status_code=403,
+    )
 
 
-# Expose the role to templates so the sidebar can hide admin-only sections from managers.
-templates.env.globals["session_role"] = _role
+def _session_role(request: Request) -> Optional[str]:
+    """The signed-in role for template gating: 'admin', 'manager', or None — backed by
+    live Legion SSO groups, not a cookie of our own."""
+    identity = sso_identity(request)
+    if identity is None:
+        return None
+    groups = set(identity.get("groups") or [])
+    if _ADMIN_GROUP in groups:
+        return "admin"
+    if _MANAGER_GROUP in groups:
+        return "manager"
+    return None
 
 
-# ── Login / logout ─────────────────────────────────────────────────────────────
+# Expose to templates: `session_role` hides admin-only nav from managers (unchanged
+# contract from before the Legion rework); `session_identity` is the raw SSO claims,
+# used for the portal <-> admin cross-navigation links (role == "student").
+templates.env.globals["session_role"] = _session_role
+templates.env.globals["session_identity"] = sso_identity
 
-@router.get("/login", response_class=HTMLResponse)
-async def admin_login_get(request: Request, error: str = ""):
-    return templates.TemplateResponse("admin/login.html", {"request": request, "error": error})
 
-
-@router.post("/login")
-async def admin_login_post(
-    request: Request,
-    password: str = Form(...),
-    db: AsyncSession = Depends(get_db),
-):
-    role = None
-    if hmac.compare_digest(password, settings.admin_password):
-        role = "admin"
-    elif settings.manager_password and hmac.compare_digest(password, settings.manager_password):
-        role = "manager"
-
-    if role is None:
-        await audit.record(db, request, "admin.login_failed", "Failed admin login attempt", actor="anonymous")
-        await db.commit()
-        return templates.TemplateResponse(
-            "admin/login.html",
-            {"request": request, "error": "Incorrect password."},
-            status_code=401,
-        )
-    await audit.record(db, request, "admin.login", f"{role.capitalize()} signed in", actor=role)
-    await db.commit()
-    dest = "/admin" if role == "admin" else "/admin/opportunities"
-    response = RedirectResponse(dest, status_code=303)
-    response.set_cookie(_COOKIE, _signer.dumps(role), httponly=True, samesite="lax", max_age=_MAX_AGE)
-    return response
-
+# ── Logout ─────────────────────────────────────────────────────────────────────
 
 @router.get("/logout")
-async def admin_logout():
-    response = RedirectResponse("/admin/login", status_code=303)
-    response.delete_cookie(_COOKIE)
-    return response
+async def admin_logout(request: Request):
+    # Single logout: bounce to Legion's /sso/logout, which clears the shared `mw_sso`
+    # cookie for every sibling app — including the student portal.
+    return RedirectResponse(logout_url(request, return_to="/admin"), status_code=303)
 
 
 # ── Dashboard ──────────────────────────────────────────────────────────────────
@@ -192,217 +168,60 @@ async def admin_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
     )
 
 
-# ── Students ───────────────────────────────────────────────────────────────────
+# ── Roster (read-only, synced from Legion) ──────────────────────────────────────
+#
+# Students/Mentors are a read-only mirror synced from Legion (services/legion_sync.py).
+# Add/edit/archive members in Legion's /admin, not here — this is just a view plus a
+# manual "Sync now" trigger for the hourly job (services/scheduler.py).
 
-@router.get("/students", response_class=HTMLResponse)
-async def admin_students_list(
+@router.get("/roster", response_class=HTMLResponse)
+async def admin_roster(
     request: Request, show_archived: int = 0, db: AsyncSession = Depends(get_db)
 ):
     if redirect := _require_auth(request):
         return redirect
 
-    q = select(Student).order_by(Student.name)
+    student_q = select(Student).order_by(Student.name)
+    mentor_q = select(Mentor).order_by(Mentor.name)
     if not show_archived:
-        q = q.where(Student.is_active.is_(True))
-    students = (await db.execute(q)).scalars().all()
+        student_q = student_q.where(Student.is_active.is_(True))
+        mentor_q = mentor_q.where(Mentor.is_active.is_(True))
+
+    from app.services.app_settings import LEGION_LAST_SYNCED_KEY, get_setting
+    last_synced = await get_setting(db, LEGION_LAST_SYNCED_KEY)
 
     return templates.TemplateResponse(
-        "admin/students.html",
+        "admin/roster.html",
         {
             "request": request,
-            "students": students,
-            "levels": list(StudentLevel),
+            "students": (await db.execute(student_q)).scalars().all(),
+            "mentors": (await db.execute(mentor_q)).scalars().all(),
             "show_archived": bool(show_archived),
-            "error": request.query_params.get("error"),
+            "last_synced": last_synced,
+            "legion_base_url": settings.legion_base_url,
+            "synced": request.query_params.get("synced"),
+            "sync_error": request.query_params.get("sync_error"),
         },
     )
 
 
-@router.post("/students")
-async def admin_students_create(
-    request: Request,
-    name: str = Form(...),
-    level: str = Form(...),
-    team_number: Optional[str] = Form(None),
-    slack_user_id: Optional[str] = Form(None),
-    db: AsyncSession = Depends(get_db),
-):
+@router.post("/roster/sync")
+async def admin_roster_sync(request: Request, db: AsyncSession = Depends(get_db)):
+    """Manually trigger a roster pull from Legion."""
     if redirect := _require_auth(request):
         return redirect
+    from urllib.parse import quote
 
-    student = Student(
-        name=name.strip(),
-        student_code=_student_code(name),
-        level=StudentLevel(level),
-        team_number=int(team_number) if team_number and team_number.strip() else None,
-        slack_user_id=slack_user_id.strip() if slack_user_id else None,
-    )
-    db.add(student)
-    await audit.record(db, request, "student.create", f"Created student {student.name}", entity_type="student")
+    from app.services.legion_sync import LegionSyncError, sync_roster
+    try:
+        summary = await sync_roster(db)
+    except LegionSyncError as e:
+        await audit.record(db, request, "roster.sync_failed", f"Legion sync failed: {e}")
+        await db.commit()
+        return RedirectResponse(f"/admin/roster?sync_error={quote(str(e))}", status_code=303)
+    await audit.record(db, request, "roster.sync", f"Synced roster from Legion ({summary})")
     await db.commit()
-    return RedirectResponse("/admin/students", status_code=303)
-
-
-@router.get("/students/{student_id}/edit", response_class=HTMLResponse)
-async def admin_students_edit_get(student_id: int, request: Request, db: AsyncSession = Depends(get_db)):
-    if redirect := _require_auth(request):
-        return redirect
-    student = (await db.execute(select(Student).where(Student.id == student_id))).scalars().first()
-    if not student:
-        return RedirectResponse("/admin/students", status_code=303)
-    return templates.TemplateResponse(
-        "admin/student_edit.html",
-        {"request": request, "student": student, "levels": list(StudentLevel)},
-    )
-
-
-@router.post("/students/{student_id}/edit")
-async def admin_students_edit_post(
-    student_id: int,
-    request: Request,
-    name: str = Form(...),
-    level: str = Form(...),
-    team_number: Optional[str] = Form(None),
-    slack_user_id: Optional[str] = Form(None),
-    db: AsyncSession = Depends(get_db),
-):
-    if redirect := _require_auth(request):
-        return redirect
-    student = (await db.execute(select(Student).where(Student.id == student_id))).scalars().first()
-    if student:
-        student.name = name.strip()
-        student.level = StudentLevel(level)
-        student.team_number = int(team_number) if team_number and team_number.strip() else None
-        student.slack_user_id = slack_user_id.strip() if slack_user_id else None
-        await audit.record(db, request, "student.edit", f"Edited student {student.name}", entity_type="student", entity_id=student.id)
-        await db.commit()
-    return RedirectResponse("/admin/students", status_code=303)
-
-
-@router.post("/students/{student_id}/delete")
-async def admin_students_delete(student_id: int, request: Request, db: AsyncSession = Depends(get_db)):
-    """Archive a student (soft delete) — preserves their submission history."""
-    if redirect := _require_auth(request):
-        return redirect
-    student = (await db.execute(select(Student).where(Student.id == student_id))).scalars().first()
-    if student and student.is_active:
-        student.is_active = False
-        student.archived_at = datetime.utcnow()
-        await audit.record(db, request, "student.archive", f"Archived student {student.name}", entity_type="student", entity_id=student.id)
-        await db.commit()
-    return RedirectResponse("/admin/students?show_archived=1", status_code=303)
-
-
-@router.post("/students/{student_id}/restore")
-async def admin_students_restore(student_id: int, request: Request, db: AsyncSession = Depends(get_db)):
-    if redirect := _require_auth(request):
-        return redirect
-    student = (await db.execute(select(Student).where(Student.id == student_id))).scalars().first()
-    if student and not student.is_active:
-        student.is_active = True
-        student.archived_at = None
-        await audit.record(db, request, "student.restore", f"Restored student {student.name}", entity_type="student", entity_id=student.id)
-        await db.commit()
-    return RedirectResponse("/admin/students?show_archived=1", status_code=303)
-
-
-@router.post("/students/{student_id}/purge")
-async def admin_students_purge(student_id: int, request: Request, db: AsyncSession = Depends(get_db)):
-    """Permanently delete a student and ALL their history (signups + submissions).
-
-    Only allowed once the student is archived — matches Tempus's archive-then-purge flow.
-    """
-    if redirect := _require_auth(request):
-        return redirect
-    student = (await db.execute(select(Student).where(Student.id == student_id))).scalars().first()
-    if student and not student.is_active:
-        name = student.name
-        await db.execute(delete(Signup).where(Signup.student_id == student_id))
-        await db.execute(delete(HourSubmission).where(HourSubmission.student_id == student_id))
-        await audit.record(
-            db, request, "student.purge",
-            f"Permanently deleted archived student {name} and all their signups/submissions",
-            entity_type="student", entity_id=student_id,
-        )
-        await db.execute(delete(Student).where(Student.id == student_id))
-        await db.commit()
-    return RedirectResponse("/admin/students?show_archived=1", status_code=303)
-
-
-# ── Mentors ────────────────────────────────────────────────────────────────────
-
-@router.get("/mentors", response_class=HTMLResponse)
-async def admin_mentors_list(request: Request, show_archived: int = 0, db: AsyncSession = Depends(get_db)):
-    if redirect := _require_auth(request):
-        return redirect
-    q = select(Mentor).order_by(Mentor.name)
-    if not show_archived:
-        q = q.where(Mentor.is_active.is_(True))
-    mentors = (await db.execute(q)).scalars().all()
-    return templates.TemplateResponse(
-        "admin/mentors.html",
-        {"request": request, "mentors": mentors, "show_archived": bool(show_archived)},
-    )
-
-
-@router.post("/mentors")
-async def admin_mentors_create(
-    request: Request,
-    name: str = Form(...),
-    slack_user_id: Optional[str] = Form(None),
-    db: AsyncSession = Depends(get_db),
-):
-    if redirect := _require_auth(request):
-        return redirect
-    db.add(Mentor(name=name.strip(), slack_user_id=slack_user_id.strip() if slack_user_id else None))
-    await audit.record(db, request, "mentor.create", f"Created mentor {name.strip()}", entity_type="mentor")
-    await db.commit()
-    return RedirectResponse("/admin/mentors", status_code=303)
-
-
-@router.post("/mentors/{mentor_id}/edit")
-async def admin_mentors_edit(
-    mentor_id: int,
-    request: Request,
-    name: str = Form(...),
-    slack_user_id: Optional[str] = Form(None),
-    db: AsyncSession = Depends(get_db),
-):
-    if redirect := _require_auth(request):
-        return redirect
-    mentor = (await db.execute(select(Mentor).where(Mentor.id == mentor_id))).scalars().first()
-    if mentor:
-        mentor.name = name.strip()
-        mentor.slack_user_id = slack_user_id.strip() if slack_user_id else None
-        await audit.record(db, request, "mentor.edit", f"Edited mentor {mentor.name}", entity_type="mentor", entity_id=mentor.id)
-        await db.commit()
-    return RedirectResponse("/admin/mentors", status_code=303)
-
-
-@router.post("/mentors/{mentor_id}/delete")
-async def admin_mentors_delete(mentor_id: int, request: Request, db: AsyncSession = Depends(get_db)):
-    if redirect := _require_auth(request):
-        return redirect
-    mentor = (await db.execute(select(Mentor).where(Mentor.id == mentor_id))).scalars().first()
-    if mentor and mentor.is_active:
-        mentor.is_active = False
-        mentor.archived_at = datetime.utcnow()
-        await audit.record(db, request, "mentor.archive", f"Archived mentor {mentor.name}", entity_type="mentor", entity_id=mentor.id)
-        await db.commit()
-    return RedirectResponse("/admin/mentors?show_archived=1", status_code=303)
-
-
-@router.post("/mentors/{mentor_id}/restore")
-async def admin_mentors_restore(mentor_id: int, request: Request, db: AsyncSession = Depends(get_db)):
-    if redirect := _require_auth(request):
-        return redirect
-    mentor = (await db.execute(select(Mentor).where(Mentor.id == mentor_id))).scalars().first()
-    if mentor and not mentor.is_active:
-        mentor.is_active = True
-        mentor.archived_at = None
-        await audit.record(db, request, "mentor.restore", f"Restored mentor {mentor.name}", entity_type="mentor", entity_id=mentor.id)
-        await db.commit()
-    return RedirectResponse("/admin/mentors?show_archived=1", status_code=303)
+    return RedirectResponse(f"/admin/roster?synced={quote(summary)}", status_code=303)
 
 
 # ── Opportunities & shifts ─────────────────────────────────────────────────────
@@ -1151,94 +970,6 @@ async def admin_settings_post(
             f"/admin/settings?error={quote('; '.join(errors))}", status_code=303
         )
     return RedirectResponse("/admin/settings?saved=1", status_code=303)
-
-
-# ── CSV Import ─────────────────────────────────────────────────────────────────
-
-_LEVEL_ALIASES = {
-    "freshman": StudentLevel.freshman,
-    "team_4423": StudentLevel.team_4423,
-    "4423": StudentLevel.team_4423,
-    "team_4143": StudentLevel.team_4143,
-    "4143": StudentLevel.team_4143,
-}
-
-
-@router.get("/import", response_class=HTMLResponse)
-async def admin_import_get(request: Request):
-    if redirect := _require_auth(request):
-        return redirect
-    return templates.TemplateResponse("admin/import.html", {"request": request})
-
-
-@router.post("/import", response_class=HTMLResponse)
-async def admin_import_post(request: Request, file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
-    if redirect := _require_auth(request):
-        return redirect
-
-    created, updated, errors = [], [], []
-    content = await file.read()
-    try:
-        text = content.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = content.decode("latin-1")
-
-    reader = csv.DictReader(io.StringIO(text))
-    for i, row in enumerate(reader, start=2):  # row 1 = header
-        row_type = (row.get("type") or "").strip().lower()
-        name = (row.get("name") or "").strip()
-        level_str = (row.get("level") or "").strip().lower()
-        team_str = (row.get("team_number") or "").strip()
-        slack_uid = (row.get("slack_user_id") or "").strip() or None
-
-        if not row_type or not name:
-            errors.append({"row": i, "reason": "Missing type or name", "data": dict(row)})
-            continue
-        if row_type not in ("student", "mentor"):
-            errors.append({"row": i, "reason": f"Unknown type '{row_type}'", "data": dict(row)})
-            continue
-
-        if row_type == "student":
-            level = _LEVEL_ALIASES.get(level_str)
-            if level is None:
-                errors.append({"row": i, "reason": f"Invalid level '{level_str}'", "data": dict(row)})
-                continue
-            team_number = int(team_str) if team_str.isdigit() else None
-            existing = (await db.execute(select(Student).where(func.lower(Student.name) == name.lower()))).scalars().first()
-            if existing:
-                existing.level = level
-                existing.team_number = team_number
-                existing.slack_user_id = slack_uid
-                updated.append(name)
-            else:
-                db.add(Student(
-                    name=name, student_code=_student_code(name), level=level,
-                    team_number=team_number, slack_user_id=slack_uid,
-                ))
-                created.append(name)
-        else:  # mentor
-            existing = (await db.execute(select(Mentor).where(func.lower(Mentor.name) == name.lower()))).scalars().first()
-            if existing:
-                if slack_uid:
-                    existing.slack_user_id = slack_uid
-                updated.append(name)
-            else:
-                db.add(Mentor(name=name, slack_user_id=slack_uid))
-                created.append(name)
-
-    if created or updated:
-        await audit.record(
-            db, request, "import.csv",
-            f"CSV import: {len(created)} created, {len(updated)} updated, {len(errors)} error(s)",
-            entity_type="import",
-            detail={"created": created, "updated": updated, "error_count": len(errors), "filename": file.filename},
-        )
-    await db.commit()
-
-    return templates.TemplateResponse(
-        "admin/import.html",
-        {"request": request, "created": created, "updated": updated, "errors": errors},
-    )
 
 
 # ── Audit log ──────────────────────────────────────────────────────────────────

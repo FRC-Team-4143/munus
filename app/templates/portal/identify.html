@@ -5,25 +5,17 @@
 {% block content %}
 <div class="d-flex align-items-center justify-content-center" style="min-height: 70vh;">
   <div class="card" style="width: 360px;">
-    <div class="card-body p-4">
+    <div class="card-body p-4 text-center">
       <h1 class="mb-1" style="color:#cc2200; font-style:italic; font-weight:700;">Munus</h1>
-      <p class="text-muted mb-4">Enter your student code to sign in.</p>
-      {% if error %}<div class="alert alert-danger py-2">{{ error }}</div>{% endif %}
-      <form method="post" action="/identify">
-        <div class="mb-3">
-          <label class="form-label">Student code</label>
-          <input name="student_code" class="form-control" autofocus required placeholder="e.g. a1b2c3d4">
-        </div>
-        <button type="submit" class="btn btn-primary w-100">Continue</button>
-      </form>
-      <hr class="my-4" style="border-color:#2a1a1a;">
-      <p class="text-muted small mb-0">
+      <p class="text-muted mb-4">Sign in with your Legion account.</p>
+      {% if error %}<div class="alert alert-danger py-2 text-start">{{ error }}</div>{% endif %}
+      <a href="{{ authorize_url }}" class="btn btn-primary w-100">
+        <i class="bi bi-slack me-1"></i> Sign in with Legion
+      </a>
+      <p class="text-muted small mt-4 mb-0">
         <i class="bi bi-lightning-charge me-1"></i>
-        Tip: run <code>/vhours</code> in Slack for a one-tap sign-in link — no code needed.
+        Tip: run <code>/vhours</code> in Slack for a one-tap dashboard link — no typing needed.
       </p>
-      <div class="mt-3 text-center">
-        <a href="/admin/login" class="small" style="color: #e05540; text-decoration: none;">Admin Sign In</a>
-      </div>
     </div>
   </div>
 </div>

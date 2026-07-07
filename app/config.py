@@ -2,7 +2,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # extra="ignore": tolerate leftover keys in a deployed .env (e.g. the retired
+    # ADMIN_PASSWORD/MANAGER_PASSWORD/SESSION_SECRET) instead of failing to boot.
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     slack_bot_token: str = ""
     slack_signing_secret: str = ""
@@ -11,11 +15,18 @@ class Settings(BaseSettings):
     # Blank = announcements disabled. The bot must be a member of this channel.
     slack_announce_channel: str = ""
 
-    admin_password: str = "changeme"
-    # Optional limited login that can ONLY create/manage opportunities & shifts.
-    # Blank = the manager login is disabled.
-    manager_password: str = ""
-    session_secret: str = "dev-secret-change-in-production"
+    # Legion SSO — both /admin and the student portal are gated by the shared `mw_sso`
+    # cookie. Munus only *verifies* the cookie (Legion mints it); `sso_secret` must
+    # equal Legion's SSO_SECRET. There is no local admin password or student token —
+    # the first admin is granted `munus-admin` in Legion's /admin/groups.
+    sso_secret: str = ""
+    sso_session_ttl: int = 43200  # 12h; must match Legion's cookie max_age
+    sso_cookie_domain: str = ""   # e.g. ".marswars.org" so one login spans subdomains
+
+    # Legion roster API + one-tap SSO challenge — the read-only source of truth Munus
+    # mirrors from, and the server-to-server trigger for /vhours's one-tap sign-in link.
+    legion_base_url: str = ""     # e.g. "https://legion.marswars.org"
+    legion_api_key: str = ""      # presented as X-API-Key to Legion's /api/* and /sso/challenge
 
     database_url: str = "sqlite+aiosqlite:///./munus.db"
 

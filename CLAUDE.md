@@ -6,9 +6,10 @@ Students browse volunteer **opportunities**, sign up for dated **shifts**, and s
 FastAPI + SQLAlchemy (async) + Jinja2 + SQLite. Slack integration for `/vhours` and
 interactive Approve/Reject of submissions.
 
-Sibling app to **Tempus** (attendance/hours kiosk) and intentionally mirrors its stack,
-dark styling, and conventions — but is a fully separate app with its own DB, Slack app,
-and systemd service (port 8001). Nothing is imported across the two projects.
+Sibling app to **Tempus** (attendance/hours kiosk) and **Legion** (shared roster + SSO
+provider), and intentionally mirrors Tempus's stack and dark styling — but is a fully
+separate app with its own DB, Slack app, and Docker service (port 8001). Nothing is
+imported across the projects.
 
 ## Running
 
@@ -18,7 +19,9 @@ uvicorn app.main:app --reload --port 8001
 ```
 
 Requires a `.env` file (see `.env.example`). Key vars: `SLACK_BOT_TOKEN`,
-`SLACK_SIGNING_SECRET`, `ADMIN_PASSWORD`, `SESSION_SECRET`, `BASE_URL`.
+`SLACK_SIGNING_SECRET`, `BASE_URL`, and the Legion integration — `SSO_SECRET` (must
+equal Legion's), `LEGION_BASE_URL`, `LEGION_API_KEY`. There is **no** admin password and
+no student token; both `/admin` and the student portal are gated by Legion SSO.
 `SLACK_ANNOUNCE_CHANNEL` (optional) enables new-opportunity announcements.
 
 ## Testing
@@ -40,20 +43,65 @@ app/
   models.py          # ORM models + StudentLevel labels/defaults
   utils.py           # Timezone helpers + shift-range formatting
   routers/
-    portal.py        # Student-facing: identify by code, browse, sign up, submit hours
-    admin.py         # Password-protected management UI
+    portal.py        # Student-facing: Legion-SSO identity, browse, sign up, submit hours
+    admin.py         # Legion-SSO-gated management UI (munus-admin/munus-manager groups)
     slack.py         # /vhours slash command + /interact (approve/reject)
   services/
     opportunities.py # Shift capacity checks, signup/cancel logic, new-opportunity announce
     submissions.py   # Create submission -> DM reviewer; approve/reject -> notify student
-    requirements.py  # Season required hours by level; season-total calc
+    requirements.py  # Season required hours by level; derive_level(grade, team_number)
     reports.py       # Batched roster progress report (approved/projected/required)
+    sso.py           # Verifies Legion's mw_sso cookie (verify-only; shared by admin + portal)
+    legion_sync.py   # Pulls the roster from Legion's read-only API into the local mirror
+    legion_auth.py   # One-tap sign-in: starts a Legion SSO challenge for a known member
     backup.py        # SQLite snapshot backup + staged restore (VACUUM INTO)
-    scheduler.py     # APScheduler: pre-shift reminders, post-shift prompts, weekly DM, backup
+    scheduler.py     # APScheduler: pre-shift reminders, post-shift prompts, backup, Legion sync
     slack_client.py  # AsyncWebClient wrapper + send_dm
     audit.py         # Append-only mutation log
-    app_settings.py  # Persisted runtime settings (season_start)
+    app_settings.py  # Persisted runtime settings (season_start, legion_last_synced)
 ```
+
+### Legion integration (source of truth for the roster)
+Legion owns members, teams, and user groups; Munus is a **read-only consumer** — data
+flows Legion → Munus only, never back. Unlike Tempus, Munus's *student portal* runs on
+Legion SSO too, not just `/admin` — there is exactly one identity mechanism (`mw_sso`)
+for the whole app; no Munus-specific cookie or password exists anywhere.
+- **Auth (`services/sso.py`):** both `/admin` and the portal verify Legion's `mw_sso`
+  cookie locally with the shared `SSO_SECRET` (no callback). `/admin` additionally
+  requires the `munus-admin` (full) or `munus-manager` (opportunities/shifts only) group
+  via `_require_auth` in `routers/admin.py`; the portal requires an active `role ==
+  "student"` member (`_current_student` in `routers/portal.py`). On a miss, redirect to
+  `{LEGION_BASE_URL}/sso/authorize?app=munus`. The audit actor is the SSO username.
+- **Roster mirror (`services/legion_sync.py`):** the local `Student`/`Mentor` tables are
+  a synced mirror keyed on Legion's stable `member_code`. Sync pulls
+  `/api/members?updated_since=…` hourly and on the **Sync now** button; legacy rows are
+  back-linked by `slack_user_id` then name. `Signup`/`HourSubmission` FKs stay local.
+  Munus has no `Team`/`Subteam` mirror tables (unlike Tempus) — it only ever needed the
+  raw `team_number` int. **Never add roster CRUD or write-back to Legion.**
+- **Requirement pools are derived, not admin-set:** `Student.level` (nullable — alumni/
+  no-grade students have none) is computed on every sync by
+  `services.requirements.derive_level(grade, team_number)`: junior_high/freshman grade →
+  Freshman (any team); sophomore + team 4423 → 4423 Student; everything else → 4143
+  Student. The `level_requirements` table (pool *sizes*, still admin-editable on
+  **Admin → Requirements**) is unaffected — only which pool a student falls into changed.
+- **One-tap sign-in (`services/legion_auth.py`, `GET /enter` in `routers/portal.py`):**
+  `/vhours` and the announcement button link to `/enter?member=<code>&next=<path>`. If
+  the browser already holds a live `mw_sso` cookie, `/enter` redirects straight to
+  `next` — **no** Legion round trip, which is what stops a repeated `/vhours` call from
+  spamming a fresh Slack push every time. Otherwise it calls Legion's
+  `POST /sso/challenge` (a small server-to-server addition to Legion made for this
+  rework — `X-API-Key`-authenticated, same trust boundary as the roster API; see
+  `legion/app/routers/sso.py`) to start a Slack Approve/Deny push for that *specific*
+  member without making them type a Legion username, then redirects to Legion's
+  `GET /sso/pending/{nonce}` "check Slack" page (reuses the existing `sso/pending.html`
+  polling flow — it doesn't care whether the `AuthRequest` came from the username form
+  or the API). `safe_next()` in `legion_auth.py` blocks open redirects.
+- **Portal ↔ admin cross-navigation:** trivial since both read the same live `mw_sso`
+  claims — no bridging route or synced group data needed. `portal/base.html` shows an
+  **Admin** link when `session_identity(request).groups` intersects
+  `{munus-admin, munus-manager}`; `admin/base.html` shows a **My Dashboard** link when
+  `session_identity(request).role == "student"`. Both link straight across (`/admin`,
+  `/`) since the shared cookie already grants access on the other side.
 
 ## Key Conventions
 
@@ -64,17 +112,11 @@ All datetimes in the database are **naive UTC** (`app/utils.py`):
 - `now_utc()` for "now" (matches stored values)
 
 ### Student identity (portal)
-No passwords. Two ways in, both landing on the dashboard home (`portal/home.html`):
-- **Slack magic link (primary):** `/vhours` returns a "📊 Open my dashboard" button whose
-  URL is `/enter?token=...` — a signed, 14-day token (`services/student_auth.py`
-  `make_magic_token`/`read_magic_token`). `GET /enter` validates it and sets the session
-  cookie. `magic_link(student_id, next_path)` supports deep links (e.g. the post-shift DM
-  links straight to `/submit`); `safe_next()` blocks open redirects.
-- **Student code (fallback):** typing the auto-generated `student_code` (`sha256(name)[:8]`).
-
-Both set the `munus_student` signed cookie (30 days). All identity helpers live in
-`services/student_auth.py` so the portal and Slack routers share them without importing each
-other. Admin sessions use a separate `admin_session` cookie, same pattern as Tempus.
+No passwords, no Munus-specific cookie — identity is the shared Legion `mw_sso` cookie
+(see "Legion integration" above). `_current_student` (`routers/portal.py`) resolves the
+current `Student` from `sso_identity(request)["member_code"]`. Getting a fresh browser
+onto that cookie without making the student type a Legion username is the job of
+`GET /enter` + `services/legion_auth.py` — see "Legion integration" for the full flow.
 
 ### Requirements & season total
 Required hours come from the `level_requirements` table (admin-editable, seeded from
@@ -114,16 +156,21 @@ Opportunities are created empty, so the first-shift moment is when there's final
 to sign up for. The message (`opportunities.announce_opportunity`) carries a **🙋 View & sign
 up** button (`action_id="opp_dashboard"`, value = opportunity id).
 
-A single channel message can't hold a per-person magic link (the link embeds one
-`student_id`, so everyone would sign in as that student). The **button** solves this: on
-click, `/slack/interact` reads the clicker's Slack id, looks up their `Student`, and replies
-**ephemerally** with a magic link minted for *them*, deep-linked to `/opportunities/{id}` —
-so each person gets their own one-tap sign-in. Unlinked users get an ephemeral "ask an admin"
-note. Same identity trick as `/vhours`.
+A single channel message can't hold a per-person sign-in link (a static link would sign
+everyone in as whoever it was built for). The **button** solves this: on click,
+`/slack/interact` reads the clicker's Slack id, looks up their `Student`, and replies
+**ephemerally** with an `/enter?member=<their code>&next=/opportunities/{id}` link — so
+each person gets their own one-tap sign-in, deep-linked to the opportunity. Unlinked
+users get an ephemeral "ask an admin" note. Same mechanism as `/vhours`.
 
 ### Database migrations
 No Alembic. Add a `def _migration(conn)` guarded by `inspect(conn)` in `database.py` and
-call it from `init_db()`, mirroring Tempus.
+call it from `init_db()`, mirroring Tempus. No production data predates the Legion
+rework, so its migration doesn't bother preserving old rows: `_migration_drop_students_
+if_legacy_schema` just drops `students` if it's still on the pre-rework schema (NOT NULL
+`level`) and lets `create_all()` rebuild it fresh — don't take this as the general
+pattern for a real data-preserving migration (see Tempus's/Legion's `_migration_*`
+functions for that; they rename-and-copy instead of dropping).
 
 ## UI Conventions
 
@@ -140,6 +187,7 @@ add Bootstrap default light classes.
 | Post-shift submit prompts | every 30 min (DMs after a shift ends, once) |
 | Auto-reject unlogged shifts | every 6 h (records a rejected submission `AUTO_REJECT_DAYS` after a shift ends if the student never logged it; `0` = off) |
 | Database backup | `BACKUP_DAY` at `BACKUP_TIME` (SQLite snapshot, rotates to `BACKUP_KEEP`) |
+| Legion roster sync | hourly, on the hour (cheap incremental pull via `updated_since`) |
 
 ## Backups (`services/backup.py`)
 

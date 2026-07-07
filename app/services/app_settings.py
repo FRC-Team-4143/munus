@@ -16,6 +16,7 @@ from app.models import AppSetting
 from app.utils import local_to_utc
 
 SEASON_START_KEY = "season_start"
+LEGION_LAST_SYNCED_KEY = "legion_last_synced"
 
 
 async def get_setting(db: AsyncSession, key: str) -> Optional[str]:

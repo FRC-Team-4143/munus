@@ -1,8 +1,12 @@
 """End-to-end smoke tests for the student portal (exercises the Jinja templates)."""
+from app.services.sso import SSO_COOKIE
+from tests.conftest import make_sso_cookie
 
 
 async def _identify(client, code: str):
-    return await client.post("/identify", data={"student_code": code})
+    """Set a valid `mw_sso` cookie for the student with this `member_code` — the portal
+    has no cookie/token of its own, it's the same Legion identity `/admin` uses."""
+    client.cookies.set(SSO_COOKIE, make_sso_cookie(role="student", member_code=code, groups=()))
 
 
 async def test_identify_and_browse(client, make_student, make_mentor, make_opportunity, make_shift):
@@ -11,12 +15,7 @@ async def test_identify_and_browse(client, make_student, make_mentor, make_oppor
     opp = await make_opportunity(name="Food Drive", location="Community Center")
     shift = await make_shift(opp.id, capacity=2)
 
-    # Bad code is rejected.
-    bad = await _identify(client, "nope")
-    assert bad.status_code == 401
-
-    resp = await _identify(client, "ada00001")
-    assert resp.status_code == 303
+    await _identify(client, "ada00001")
 
     listing = await client.get("/opportunities")
     assert listing.status_code == 200
@@ -48,35 +47,80 @@ async def test_portal_requires_identity(client):
     assert resp.status_code == 303  # redirected to landing
 
 
-async def test_magic_link_signs_in_and_lands_on_dashboard(client, make_student):
-    from app.services.student_auth import make_magic_token
+async def test_unmatched_member_code_shows_identify_page(client):
+    """An SSO identity that doesn't match any local Student row (e.g. not yet synced)
+    is treated the same as being signed out — the dashboard just shows the sign-in page."""
+    client.cookies.set(SSO_COOKIE, make_sso_cookie(role="student", member_code="nope", groups=()))
+    resp = await client.get("/")
+    assert resp.status_code == 200
+    assert "Sign in with Legion" in resp.text
 
-    student = await make_student(code="zzz00001")
-    resp = await client.get(f"/enter?token={make_magic_token(student.id)}", follow_redirects=False)
+
+async def test_mentor_identity_cannot_reach_portal(client):
+    client.cookies.set(SSO_COOKIE, make_sso_cookie(role="mentor", groups=()))
+    resp = await client.get("/opportunities")
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/"
-
-    home = await client.get("/")  # cookie now set -> dashboard renders
-    assert home.status_code == 200
-    assert "Season total" in home.text
 
 
-async def test_magic_link_deep_links_with_next(client, make_student):
-    from app.services.student_auth import make_magic_token
+async def test_enter_already_signed_in_skips_legion_challenge(client, make_student, monkeypatch):
+    from app.services import legion_auth
 
-    student = await make_student(code="zzz00002")
-    resp = await client.get(
-        f"/enter?token={make_magic_token(student.id)}&next=%2Fsubmit", follow_redirects=False
-    )
+    async def boom(*a, **kw):
+        raise AssertionError("should not start a Legion challenge when already signed in")
+
+    monkeypatch.setattr(legion_auth, "start_challenge", boom)
+    student = await make_student(code="zzz00001")
+    await _identify(client, "zzz00001")
+
+    resp = await client.get(f"/enter?member={student.member_code}&next=/submit", follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"] == "/submit"
 
 
-async def test_invalid_magic_link_shows_hint(client):
-    resp = await client.get("/enter?token=bogus")
-    assert resp.status_code == 401
-    assert "expired" in resp.text.lower()
-    assert "/vhours" in resp.text
+async def test_enter_unknown_member_falls_back_to_legion_authorize(client):
+    resp = await client.get("/enter?member=doesnotexist", follow_redirects=False)
+    assert resp.status_code == 303
+    assert "sso/authorize" in resp.headers["location"]
+
+
+async def test_enter_no_member_falls_back_to_legion_authorize(client):
+    resp = await client.get("/enter", follow_redirects=False)
+    assert resp.status_code == 303
+    assert "sso/authorize" in resp.headers["location"]
+
+
+async def test_enter_known_member_redirects_to_pending_page(client, make_student, monkeypatch):
+    from app.services import legion_auth
+
+    student = await make_student(code="zzz00002")
+
+    async def fake_start_challenge(member_code, *, return_to="/"):
+        assert member_code == student.member_code
+        assert return_to == "/submit"
+        return "http://legion.test/sso/pending/abc123"
+
+    monkeypatch.setattr(legion_auth, "start_challenge", fake_start_challenge)
+
+    resp = await client.get(
+        f"/enter?member={student.member_code}&next=/submit", follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "http://legion.test/sso/pending/abc123"
+
+
+async def test_enter_shows_unavailable_page_when_legion_unreachable(client, make_student, monkeypatch):
+    from app.services import legion_auth
+
+    student = await make_student(code="zzz00003")
+
+    async def fake_start_challenge(member_code, *, return_to="/"):
+        return None
+
+    monkeypatch.setattr(legion_auth, "start_challenge", fake_start_challenge)
+
+    resp = await client.get(f"/enter?member={student.member_code}")
+    assert resp.status_code == 503
+    assert "unavailable" in resp.text.lower()
 
 
 async def test_dashboard_shows_projected_hours(client, db, make_student, make_opportunity, make_shift):
@@ -249,3 +293,19 @@ async def test_submit_shift_rejects_non_positive_hours(
     assert resp.status_code == 303
     count = (await db.execute(select(func.count()).select_from(HourSubmission))).scalar_one()
     assert count == 0
+
+
+async def test_portal_admin_link_shown_for_manager_student(client, make_student):
+    student = await make_student(code="mgr00001")
+    client.cookies.set(SSO_COOKIE, make_sso_cookie(
+        role="student", member_code=student.member_code, groups=("munus-manager",),
+    ))
+    resp = await client.get("/")
+    assert '<a class="nav-link" href="/admin">' in resp.text
+
+
+async def test_portal_admin_link_hidden_for_plain_student(client, make_student):
+    student = await make_student(code="plain001")
+    await _identify(client, "plain001")
+    resp = await client.get("/")
+    assert '<a class="nav-link" href="/admin">' not in resp.text

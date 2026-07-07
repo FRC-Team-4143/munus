@@ -203,6 +203,24 @@ async def job_nightly_backup() -> None:
         log.exception("Backup failed")
 
 
+async def job_legion_sync() -> None:
+    """Pull the roster from Legion. No-op (with a log line) when Legion isn't configured,
+    so the job is harmless before the SSO/API env vars are set."""
+    if not settings.updates_enabled:
+        log.info("Legion sync skipped (updates_enabled=false)")
+        return
+    if not settings.legion_base_url or not settings.legion_api_key:
+        log.info("Legion sync skipped (LEGION_BASE_URL/LEGION_API_KEY not set)")
+        return
+    from app.services.legion_sync import sync_roster
+    try:
+        async with AsyncSessionLocal() as db:
+            summary = await sync_roster(db)
+        log.info("Scheduled Legion sync: %s", summary)
+    except Exception:  # never let a sync failure crash the scheduler
+        log.exception("Scheduled Legion sync failed")
+
+
 def register_jobs(scheduler: AsyncIOScheduler) -> None:
     """(Re)register all scheduled jobs from the current settings.
 
@@ -235,6 +253,14 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         job_nightly_backup,
         CronTrigger(day_of_week=settings.backup_day, hour=int(bh), minute=int(bm), timezone=settings.timezone),
         id="nightly_backup",
+        replace_existing=True,
+    )
+
+    # Legion roster sync — hourly (cheap incremental pull via updated_since).
+    scheduler.add_job(
+        job_legion_sync,
+        CronTrigger(minute=0, timezone=settings.timezone),
+        id="legion_sync",
         replace_existing=True,
     )
 

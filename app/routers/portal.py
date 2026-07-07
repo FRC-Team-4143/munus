@@ -1,8 +1,12 @@
 """
 Student-facing portal — browse opportunities, sign up for shifts, submit hours.
 
-Lightweight identity: the student enters their code once; it is stored in a signed
-cookie. No passwords — this is a low-stakes internal tool.
+Identity is the same shared `mw_sso` Legion cookie `/admin` uses — see
+`services/sso.py`. There is no portal-specific cookie or password. A fresh browser
+gets onto that cookie via `/enter`, Slack's one-tap bootstrap route
+(`services/legion_auth.py` starts a Legion SSO challenge for a member Munus already
+knows from a Slack payload, skipping Legion's username-entry form); a cold visit with
+no Slack context falls back to Legion's normal sign-in.
 """
 from datetime import datetime, timedelta
 from typing import Optional
@@ -19,13 +23,11 @@ from app.models import (
     HourSubmission, Opportunity, Shift, Signup, SignupStatus, Student,
     SubmissionStatus, level_label,
 )
-from app.services import opportunities as opp_service
+from app.services import legion_auth, opportunities as opp_service
 from app.services import submissions as submission_service
+from app.services.legion_auth import safe_next
 from app.services.requirements import resolve_required_hours, season_total_hours
-from app.services.student_auth import (
-    clear_session_cookie, read_magic_token, safe_next, set_session_cookie,
-    student_id_from_session,
-)
+from app.services.sso import logout_url, make_authorize_url, sso_identity
 from app.utils import (
     format_date_range, format_shift_range, now_utc, shift_length_hours, utc_to_local,
 )
@@ -39,15 +41,19 @@ templates.env.filters["localdt"] = (
 templates.env.filters["shiftrange"] = lambda s, e=None: format_shift_range(s, e)
 templates.env.filters["levellabel"] = level_label
 
+# Exposed for the "Admin" cross-nav link in portal/base.html (see admin.py's matching
+# "My Dashboard" link) — both apps read the same live mw_sso claims, no bridging route.
+templates.env.globals["session_identity"] = sso_identity
+
 
 # ── Student identity ───────────────────────────────────────────────────────────
 
 async def _current_student(request: Request, db: AsyncSession) -> Optional[Student]:
-    sid = student_id_from_session(request)
-    if sid is None:
+    identity = sso_identity(request)
+    if identity is None or identity.get("role") != "student":
         return None
     student = (
-        await db.execute(select(Student).where(Student.id == sid))
+        await db.execute(select(Student).where(Student.member_code == identity["member_code"]))
     ).scalars().first()
     if student is None or not student.is_active:
         return None
@@ -136,7 +142,10 @@ async def _season_progress(db: AsyncSession, student: Student) -> dict:
 async def index(request: Request, db: AsyncSession = Depends(get_db)):
     student = await _current_student(request, db)
     if not student:
-        return templates.TemplateResponse("portal/identify.html", {"request": request})
+        return templates.TemplateResponse(
+            "portal/identify.html",
+            {"request": request, "authorize_url": make_authorize_url(request)},
+        )
 
     progress = await _season_progress(db, student)
     recent = (
@@ -166,54 +175,43 @@ async def index(request: Request, db: AsyncSession = Depends(get_db)):
 
 @router.get("/enter")
 async def enter(
-    request: Request, token: str = "", next: str = "/", db: AsyncSession = Depends(get_db)
+    request: Request, member: str = "", next: str = "/", db: AsyncSession = Depends(get_db)
 ):
-    """One-tap Slack magic-link sign-in: validate the token, set the session cookie."""
-    sid = read_magic_token(token)
-    if sid is not None:
-        student = (await db.execute(select(Student).where(Student.id == sid))).scalars().first()
-        if student and student.is_active:
-            response = RedirectResponse(safe_next(next), status_code=303)
-            set_session_cookie(response, student.id)
-            return response
-    return templates.TemplateResponse(
-        "portal/identify.html",
-        {"request": request, "error": "That sign-in link is invalid or expired — run "
-                                       "`/vhours` in Slack for a fresh one."},
-        status_code=401,
-    )
+    """One-tap sign-in bootstrap — Slack links (`/vhours`, the opportunity-announcement
+    button) point here with a known Legion `member_code`. If the browser already holds a
+    live `mw_sso` cookie, skip Legion entirely — instant, and it's what keeps a repeated
+    `/vhours` call from spamming a fresh Slack push every time. Otherwise start a Legion
+    SSO challenge for that member (services/legion_auth.py) and send the browser to the
+    "check Slack" pending page; an unrecognized/missing member falls back to Legion's
+    normal username-entry sign-in.
+    """
+    next_path = safe_next(next)
+    if sso_identity(request) is not None:
+        return RedirectResponse(next_path, status_code=303)
 
-
-@router.post("/identify")
-async def identify(
-    request: Request,
-    student_code: str = Form(...),
-    db: AsyncSession = Depends(get_db),
-):
-    code = student_code.strip().lower()
-    student = (
-        await db.execute(
-            select(Student).where(
-                Student.student_code == code, Student.is_active.is_(True)
+    student = None
+    if member:
+        student = (
+            await db.execute(
+                select(Student).where(Student.member_code == member, Student.is_active.is_(True))
             )
-        )
-    ).scalars().first()
-    if not student:
+        ).scalars().first()
+    if student is None:
+        return RedirectResponse(make_authorize_url(request, return_to=next_path), status_code=303)
+
+    pending_url = await legion_auth.start_challenge(student.member_code, return_to=next_path)
+    if pending_url is None:
         return templates.TemplateResponse(
-            "portal/identify.html",
-            {"request": request, "error": "That code didn't match an active student."},
-            status_code=401,
+            "portal/sso_unavailable.html", {"request": request}, status_code=503
         )
-    response = RedirectResponse("/", status_code=303)
-    set_session_cookie(response, student.id)
-    return response
+    return RedirectResponse(pending_url, status_code=303)
 
 
 @router.get("/logout")
-async def logout():
-    response = RedirectResponse("/", status_code=303)
-    clear_session_cookie(response)
-    return response
+async def logout(request: Request):
+    # Single logout: bounce to Legion's /sso/logout, which clears the shared `mw_sso`
+    # cookie for every sibling app — including /admin.
+    return RedirectResponse(logout_url(request, return_to="/"), status_code=303)
 
 
 # ── Opportunities ──────────────────────────────────────────────────────────────

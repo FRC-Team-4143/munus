@@ -80,7 +80,7 @@ async def test_student_vhours_message(db, make_student, make_opportunity, make_s
     assert "Your Volunteer Hours" in msg
     assert "Season total:" in msg
     assert "Park Cleanup" in msg        # the upcoming shift is listed
-    assert "/enter?token=" in msg       # one-tap dashboard magic link
+    assert f"/enter?member={student.member_code}" in msg  # one-tap dashboard link
 
 
 async def test_report_met_when_requirement_reached(db, make_student):

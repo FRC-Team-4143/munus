@@ -1,24 +1,30 @@
-"""Smoke tests for the admin UI (auth + template rendering)."""
+"""Smoke tests for the admin UI (Legion SSO auth + template rendering)."""
 import pytest
 from sqlalchemy import select
 
-from app.config import settings
+from app.services.sso import SSO_COOKIE
+from tests.conftest import make_sso_cookie
 
 
-async def _login(client):
-    resp = await client.post("/admin/login", data={"password": settings.admin_password})
-    assert resp.status_code in (200, 303)
+async def _login(client, **cookie_kwargs):
+    client.cookies.set(SSO_COOKIE, make_sso_cookie(**cookie_kwargs))
 
 
 async def test_admin_requires_auth(client):
-    resp = await client.get("/admin/students")
-    assert resp.status_code == 303  # redirect to login
+    resp = await client.get("/admin/roster", follow_redirects=False)
+    assert resp.status_code == 303  # redirect to Legion sign-in
+    assert "sso/authorize" in resp.headers["location"]
+
+
+async def test_admin_forbidden_without_group(client):
+    await _login(client, groups=())
+    resp = await client.get("/admin/roster")
+    assert resp.status_code == 403
 
 
 @pytest.mark.parametrize("path", [
-    "/admin", "/admin/opportunities", "/admin/submissions", "/admin/students",
-    "/admin/mentors", "/admin/report", "/admin/import",
-    "/admin/audit", "/admin/backup", "/admin/settings",
+    "/admin", "/admin/opportunities", "/admin/submissions", "/admin/roster",
+    "/admin/report", "/admin/audit", "/admin/backup", "/admin/settings",
 ])
 async def test_admin_pages_render(client, path):
     await _login(client)
@@ -52,42 +58,6 @@ async def test_send_prompt_button_dms_signed_up_students(
     assert "prompt_sent=1" in resp.headers["location"]
     assert len(calls) == 1 and calls[0][0] == "U0STU"
     assert any(b.get("type") == "actions" for b in calls[0][1])  # interactive prompt
-
-
-async def test_purge_requires_archived_then_cascades(
-    client, db, make_student, make_opportunity, make_shift
-):
-    from app.models import (
-        HourSubmission, Signup, SignupStatus, Student, SubmissionStatus,
-    )
-
-    await _login(client)
-    student = await make_student(code="purge001")
-    opp = await make_opportunity()
-    shift = await make_shift(opp.id)
-    db.add(Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.signed_up))
-    db.add(HourSubmission(student_id=student.id, hours=2.0, status=SubmissionStatus.approved))
-    await db.commit()
-    sid = student.id
-
-    async def _exists(model, **filters):
-        q = select(model)
-        for k, v in filters.items():
-            q = q.where(getattr(model, k) == v)
-        return (await db.execute(q)).scalars().first() is not None
-
-    # Active student: purge is refused (still archived-gated).
-    r = await client.post(f"/admin/students/{sid}/purge", follow_redirects=False)
-    assert r.status_code == 303
-    assert await _exists(Student, id=sid)
-
-    # Archive, then purge -> student and all their history are gone.
-    await client.post(f"/admin/students/{sid}/delete")  # archive
-    r = await client.post(f"/admin/students/{sid}/purge", follow_redirects=False)
-    assert r.status_code == 303
-    assert not await _exists(Student, id=sid)
-    assert not await _exists(HourSubmission, student_id=sid)
-    assert not await _exists(Signup, student_id=sid)
 
 
 async def test_opportunity_purge_requires_archived_then_cascades(
@@ -234,14 +204,8 @@ async def test_opportunity_notify_dms_upcoming_signups(
     assert "Team polo" in calls[0][1]  # attire included
 
 
-async def test_manager_role_scoped_to_opportunities(client, monkeypatch):
-    from app.config import settings as cfg
-    monkeypatch.setattr(cfg, "manager_password", "mgr-pass")
-
-    # Manager login lands on the Opportunities page.
-    r = await client.post("/admin/login", data={"password": "mgr-pass"}, follow_redirects=False)
-    assert r.status_code == 303
-    assert r.headers["location"] == "/admin/opportunities"
+async def test_manager_role_scoped_to_opportunities(client):
+    await _login(client, groups=("munus-manager",))
 
     # Can view + create opportunities.
     assert (await client.get("/admin/opportunities")).status_code == 200
@@ -249,14 +213,14 @@ async def test_manager_role_scoped_to_opportunities(client, monkeypatch):
     assert cr.status_code == 303 and "/admin/opportunities/" in cr.headers["location"]
 
     # Blocked from every admin-only section → bounced to Opportunities.
-    for path in ("/admin", "/admin/students", "/admin/submissions", "/admin/settings", "/admin/backup", "/admin/report"):
+    for path in ("/admin", "/admin/roster", "/admin/submissions", "/admin/settings", "/admin/backup", "/admin/report"):
         resp = await client.get(path, follow_redirects=False)
         assert resp.status_code == 303
         assert resp.headers["location"] == "/admin/opportunities", path
 
     # Sidebar hides admin sections for a manager.
     page = await client.get("/admin/opportunities")
-    assert "/admin/students" not in page.text
+    assert "/admin/roster" not in page.text
     assert "/admin/backup" not in page.text
     assert "/admin/opportunities" in page.text
 
@@ -339,3 +303,28 @@ async def test_shift_create_rejects_end_before_start(client, db, make_opportunit
     assert "error=" in resp.headers["location"]
     count = (await db.execute(select(func.count()).select_from(Shift))).scalar_one()
     assert count == 0
+
+
+async def test_roster_sync_now_button(client, monkeypatch):
+    import app.routers.admin as adminmod
+
+    async def fake_sync(db):
+        return "1 students, 1 mentors"
+
+    monkeypatch.setattr("app.services.legion_sync.sync_roster", fake_sync)
+    await _login(client)
+    resp = await client.post("/admin/roster/sync", follow_redirects=False)
+    assert resp.status_code == 303
+    assert "synced=" in resp.headers["location"]
+
+
+async def test_admin_my_dashboard_link_shown_for_student_role(client):
+    await _login(client, role="student")
+    page = await client.get("/admin/opportunities")
+    assert "My Dashboard" in page.text
+
+
+async def test_admin_my_dashboard_link_hidden_for_mentor_role(client):
+    await _login(client, role="mentor")
+    page = await client.get("/admin/opportunities")
+    assert "My Dashboard" not in page.text

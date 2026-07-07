@@ -7,6 +7,8 @@ import pytest
 
 from app.config import settings
 from app.routers import admin
+from app.services.sso import SSO_COOKIE
+from tests.conftest import make_sso_cookie
 
 _MUTABLE = [
     "slack_announce_channel", "timezone", "reminder_lead_hours",
@@ -15,8 +17,7 @@ _MUTABLE = [
 
 
 async def _login(client):
-    resp = await client.post("/admin/login", data={"password": settings.admin_password})
-    assert resp.status_code in (200, 303)
+    client.cookies.set(SSO_COOKIE, make_sso_cookie())
 
 
 def _form(**overrides):

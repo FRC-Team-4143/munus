@@ -58,6 +58,10 @@
     </ul>
     <ul class="navbar-nav align-items-center">
       {% if student %}<li class="nav-item"><span class="navbar-text py-0 me-3">{{ student.name }}</span></li>{% endif %}
+      {% set identity = session_identity(request) %}
+      {% if identity and identity.groups and (('munus-admin' in identity.groups) or ('munus-manager' in identity.groups)) %}
+      <li class="nav-item"><a class="nav-link" href="/admin"><i class="bi bi-shield-lock"></i> Admin</a></li>
+      {% endif %}
       <li class="nav-item"><a class="nav-link" href="/logout"><i class="bi bi-box-arrow-right"></i> Sign out</a></li>
     </ul>
   </div>

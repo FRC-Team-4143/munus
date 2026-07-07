@@ -35,8 +35,9 @@ async def test_vhours_for_linked_student(client, db, make_student):
     # Freshman requirement default is 5.0; 3 approved hrs -> not yet met.
     assert "3.0 / 5.0" in resp.text
     assert "still needed" in resp.text
-    # Ephemeral response carries a one-tap sign-in link to the dashboard.
-    assert "/enter?token=" in resp.text
+    # Ephemeral response carries a one-tap sign-in link to the dashboard, keyed on the
+    # student's Legion member_code (no Legion round trip happens until it's clicked).
+    assert f"/enter?member={student.member_code}" in resp.text
 
 
 async def test_vhours_lists_only_upcoming_shifts(client, db, make_student, make_opportunity, make_shift):
