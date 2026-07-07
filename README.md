@@ -96,13 +96,28 @@ Pushing to `main` automatically deploys via GitHub Actions (tests must pass firs
 
 ## Slack Setup
 
-1. Create a **new** Slack app (separate from Tempus) at https://api.slack.com/apps
+1. Create a Slack app at https://api.slack.com/apps — **in production this is actually
+   the same app shared with Tempus and Legion** (see the note below), despite the
+   "separate from Tempus" step this used to say.
 2. **OAuth & Permissions** → add bot scopes: `chat:write`, `im:write`, `commands`
 3. **Slash Commands** → add `/vhours` → `https://<host>/slack/command`
-4. **Interactivity & Shortcuts** → Request URL `https://<host>/slack/interact`
+4. **Interactivity & Shortcuts** → Request URL `https://<host>/slack/interact` — see
+   the note below if this app is shared with the sibling apps.
 5. Install to the workspace; copy the Bot Token and Signing Secret into `.env`
 
 Students and reviewing mentors need their Slack user IDs set in the admin UI to receive DMs.
+
+> **Sharing one Slack app across Tempus/Munus/Legion:** sending messages and slash
+> commands work fine shared (any number of services can use the same bot token, and
+> each slash command has its own independently configurable Request URL) — but Slack
+> allows only **one** Interactivity Request URL per app, and each of these three
+> services wants its own button clicks. Rather than each getting a separate app, the
+> shared app's Interactivity Request URL points at Legion's `/slack/dispatch` (a
+> stateless relay with no business logic — see `legion/README.md` "Single sign-on"),
+> which forwards each payload to whichever app's own `/slack/interact` actually owns
+> it based on `action_id`/`callback_id`. Don't point this app's Interactivity URL at
+> Munus's own `/slack/interact` directly if it's the shared app — that would starve
+> Tempus's and Legion's interactive buttons of real traffic.
 
 ---
 
