@@ -227,6 +227,30 @@ async def test_manager_role_scoped_to_opportunities(client):
     assert "/admin/opportunities" in page.text
 
 
+async def test_admin_sidebar_shows_legion_link_when_configured(client):
+    from app.config import settings
+    original = settings.legion_base_url
+    try:
+        settings.legion_base_url = "https://legion.example.org"
+        await _login(client)
+        resp = await client.get("/admin")
+        assert 'href="https://legion.example.org"' in resp.text
+    finally:
+        settings.legion_base_url = original
+
+
+async def test_admin_sidebar_hides_legion_link_when_unconfigured(client):
+    from app.config import settings
+    original = settings.legion_base_url
+    try:
+        settings.legion_base_url = ""
+        await _login(client)
+        resp = await client.get("/admin")
+        assert ">Legion</a>" not in resp.text
+    finally:
+        settings.legion_base_url = original
+
+
 async def test_report_notify_dms_slack_linked_students(
     client, db, monkeypatch, make_student, make_opportunity, make_shift
 ):

@@ -44,6 +44,7 @@ templates.env.filters["levellabel"] = level_label
 # Exposed for the "Admin" cross-nav link in portal/base.html (see admin.py's matching
 # "My Dashboard" link) — both apps read the same live mw_sso claims, no bridging route.
 templates.env.globals["session_identity"] = sso_identity
+templates.env.globals["legion_base_url"] = lambda: settings.legion_base_url
 
 
 # ── Student identity ───────────────────────────────────────────────────────────

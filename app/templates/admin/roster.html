@@ -11,8 +11,8 @@
     {% else %}
     <a href="/admin/roster?show_archived=1" class="btn btn-outline-secondary btn-sm"><i class="bi bi-archive me-1"></i> Show Archived</a>
     {% endif %}
-    {% if legion_base_url %}
-    <a class="btn btn-outline-light btn-sm" href="{{ legion_base_url }}/admin" target="_blank">
+    {% if legion_base_url() %}
+    <a class="btn btn-outline-light btn-sm" href="{{ legion_base_url() }}/admin" target="_blank">
       <i class="bi bi-box-arrow-up-right me-1"></i> Manage in Legion
     </a>
     {% endif %}

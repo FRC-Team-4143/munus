@@ -127,7 +127,11 @@ def _require_auth(request: Request):
 
 # Expose to templates: `session_identity` is the raw SSO claims, used for the portal
 # <-> admin cross-navigation links (role == "student") and the Admin sidebar link.
+# `legion_base_url()` powers the persistent "Legion" nav link back to the identity
+# provider's own home page (blank = link omitted) — a callable, not a plain value,
+# so it reflects live Settings-page edits rather than its value at import time.
 templates.env.globals["session_identity"] = sso_identity
+templates.env.globals["legion_base_url"] = lambda: settings.legion_base_url
 
 
 # ── Logout ─────────────────────────────────────────────────────────────────────
@@ -208,7 +212,6 @@ async def admin_roster(
             "mentors": (await db.execute(mentor_q)).scalars().all(),
             "show_archived": bool(show_archived),
             "last_synced": last_synced,
-            "legion_base_url": settings.legion_base_url,
             "synced": request.query_params.get("synced"),
             "sync_error": request.query_params.get("sync_error"),
         },

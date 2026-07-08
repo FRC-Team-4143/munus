@@ -337,6 +337,32 @@ async def test_portal_admin_link_hidden_for_plain_student(client, make_student):
     assert '<a class="nav-link" href="/admin">' not in resp.text
 
 
+async def test_portal_navbar_shows_legion_link_when_configured(client, make_student):
+    from app.config import settings
+    original = settings.legion_base_url
+    try:
+        settings.legion_base_url = "https://legion.example.org"
+        await make_student(code="plain002")
+        await _identify(client, "plain002")
+        resp = await client.get("/me")
+        assert 'href="https://legion.example.org"' in resp.text
+    finally:
+        settings.legion_base_url = original
+
+
+async def test_portal_navbar_hides_legion_link_when_unconfigured(client, make_student):
+    from app.config import settings
+    original = settings.legion_base_url
+    try:
+        settings.legion_base_url = ""
+        await make_student(code="plain003")
+        await _identify(client, "plain003")
+        resp = await client.get("/me")
+        assert ">Legion</a>" not in resp.text
+    finally:
+        settings.legion_base_url = original
+
+
 async def test_root_redirects_to_me(client):
     """The dashboard is canonically /me (matching Tempus); / just redirects to it."""
     resp = await client.get("/", follow_redirects=False)
