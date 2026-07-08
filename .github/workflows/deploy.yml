@@ -29,4 +29,7 @@ jobs:
           host: ${{ secrets.MARSWARS_APPS_DEPLOY_HOST }}
           username: ${{ secrets.MARSWARS_APPS_DEPLOY_USER }}
           key: ${{ secrets.MARSWARS_APPS_DEPLOY_SSH_KEY }}
+          # Default (10m) isn't enough headroom on the droplet's 1 vCPU / 1GB when a
+          # requirements.txt change forces a real rebuild instead of a cache hit.
+          command_timeout: 30m
           script: /opt/apps/deploy.sh
