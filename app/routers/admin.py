@@ -816,6 +816,9 @@ _DAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 
 def _write_env(updates: dict[str, str]) -> None:
     """Upsert KEY=value pairs into .env, preserving other lines."""
+    # Values become raw KEY=VALUE lines below — strip any embedded CR/LF so a
+    # submitted value can never inject an extra line (e.g. overwriting SSO_SECRET).
+    updates = {k: v.replace("\r", "").replace("\n", "") for k, v in updates.items()}
     try:
         with open(ENV_PATH, "r") as f:
             lines = f.readlines()

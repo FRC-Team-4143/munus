@@ -87,7 +87,7 @@ Pushing to `main` automatically deploys via GitHub Actions (tests must pass firs
 | `SSO_SESSION_TTL` | `43200` | Max age (seconds) of the SSO cookie; match Legion |
 | `SSO_COOKIE_DOMAIN` | *(none)* | Cookie domain (e.g. `.marswars.org`) so one login spans subdomains |
 | `LEGION_BASE_URL` | *(required)* | Base URL of the Legion app (SSO + roster API) |
-| `LEGION_API_KEY` | *(required)* | Shared key sent as `X-API-Key` to Legion's roster API and one-tap SSO challenge endpoint — **must equal Legion's `LEGION_API_KEY`** |
+| `LEGION_API_KEY` | *(required)* | Key sent as `X-API-Key` to Legion's roster API and one-tap SSO challenge endpoint — **must equal Legion's `MUNUS_API_KEY`** (Legion has a separate key per consumer) |
 | `DATABASE_URL` | `sqlite+aiosqlite:///./munus.db` | Async SQLAlchemy URL |
 | `TIMEZONE` | `America/New_York` | IANA timezone for scheduling/display |
 | `SEASON_START` | *(blank)* | Count approved hours from this ISO date (blank = all) |

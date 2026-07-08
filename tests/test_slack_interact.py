@@ -39,6 +39,7 @@ def hush_slack(monkeypatch):
         return None
 
     monkeypatch.setattr(subs, "notify_reviewer", _noop)
+    monkeypatch.setattr(subs, "notify_student_of_review", _noop)
     monkeypatch.setattr(slackmod, "send_dm", _noop)
 
     class _FakeWebhook:
@@ -282,6 +283,45 @@ async def test_review_hours_modal_updates_submission(
     assert sub.hours == 3.5
     assert sub.report == "Adjusted by mentor"
     assert sub.status == SubmissionStatus.pending   # still awaiting the decision
+
+
+async def test_submission_approve_blocked_for_non_mentor(
+    client, db, hush_slack, make_student, make_mentor, make_opportunity, make_shift
+):
+    """Regression test: submission_approve/reject previously had no mentor check at
+    all (unlike the sibling review_edit action) — any Slack user who could trigger
+    the button got it processed."""
+    _mentor, _student, sub = await _make_submission(
+        db, make_student, make_mentor, make_opportunity, make_shift
+    )
+    payload = {
+        "type": "block_actions",
+        "user": {"id": "U0STU"},                 # a student, not a mentor
+        "response_url": "https://hooks.slack.test/x",
+        "actions": [{"action_id": "submission_approve", "value": str(sub.id)}],
+    }
+    resp = await _interact(client, payload)
+    assert resp.status_code == 200
+    await db.refresh(sub)
+    assert sub.status == SubmissionStatus.pending
+
+
+async def test_submission_approve_works_for_reviewer(
+    client, db, hush_slack, make_student, make_mentor, make_opportunity, make_shift
+):
+    _mentor, _student, sub = await _make_submission(
+        db, make_student, make_mentor, make_opportunity, make_shift
+    )
+    payload = {
+        "type": "block_actions",
+        "user": {"id": "U0REV"},                 # the reviewing mentor
+        "response_url": "https://hooks.slack.test/x",
+        "actions": [{"action_id": "submission_approve", "value": str(sub.id)}],
+    }
+    resp = await _interact(client, payload)
+    assert resp.status_code == 200
+    await db.refresh(sub)
+    assert sub.status == SubmissionStatus.approved
 
 
 async def test_review_hours_modal_bad_hours_returns_errors(

@@ -3,7 +3,8 @@ name: Deploy
 # Deploys to the DigitalOcean droplet by SSHing in and running the apps-infra
 # deploy script (git pull + docker-compose build + up). Runs after the Tests
 # workflow succeeds on main, or on manual dispatch.
-# Requires repo secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY (see apps-infra README).
+# Requires org/repo secrets: MARSWARS_APPS_DEPLOY_HOST, MARSWARS_APPS_DEPLOY_USER,
+# MARSWARS_APPS_DEPLOY_SSH_KEY (see apps-infra README).
 
 on:
   workflow_run:
@@ -25,7 +26,7 @@ jobs:
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host: ${{ secrets.MARSWARS_APPS_DEPLOY_HOST }}
+          username: ${{ secrets.MARSWARS_APPS_DEPLOY_USER }}
+          key: ${{ secrets.MARSWARS_APPS_DEPLOY_SSH_KEY }}
           script: /opt/apps/deploy.sh

@@ -90,6 +90,29 @@ async def test_settings_post_writes_env_and_updates_singleton(
     assert "SLACK_ANNOUNCE_CHANNEL=C0ANNOUNCE" in written
 
 
+async def test_settings_post_cannot_inject_env_lines(
+    client, tmp_path, monkeypatch, restore_settings
+):
+    """Regression test: an embedded newline in a free-text setting must not let an
+    admin inject an arbitrary extra KEY=VALUE line into .env (e.g. SSO_SECRET)."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("SSO_SECRET=original-secret\n")
+    monkeypatch.setattr(admin, "ENV_PATH", str(env_file))
+    await _login(client)
+    settings.slack_announce_channel = ""
+
+    resp = await client.post("/admin/settings", data=_form(
+        slack_announce_channel="C0DEADBEEF\nSSO_SECRET=pwned",
+    ), follow_redirects=False)
+    assert resp.status_code == 303
+
+    written_lines = env_file.read_text().splitlines()
+    # SSO_SECRET must still be exactly one, untouched line — the injected value collapses
+    # onto a single SLACK_ANNOUNCE_CHANNEL line instead of creating a second SSO_SECRET=.
+    assert [l for l in written_lines if l.startswith("SSO_SECRET=")] == ["SSO_SECRET=original-secret"]
+    assert "SLACK_ANNOUNCE_CHANNEL=C0DEADBEEFSSO_SECRET=pwned" in written_lines
+
+
 async def test_settings_post_rejects_bad_timezone(
     client, tmp_path, monkeypatch, restore_settings
 ):
