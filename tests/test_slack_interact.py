@@ -4,7 +4,6 @@ import json
 import time
 from urllib.parse import urlencode
 
-import pytest
 from sqlalchemy import select
 
 from app.config import settings
@@ -26,30 +25,6 @@ def _signed(body: str) -> dict:
 async def _interact(client, payload: dict):
     body = urlencode({"payload": json.dumps(payload)})
     return await client.post("/slack/interact", content=body, headers=_signed(body))
-
-
-@pytest.fixture
-def hush_slack(monkeypatch):
-    """Silence outbound Slack calls (webhooks / DMs / reviewer notify) during interact tests."""
-    import app.routers.slack as slackmod
-    import app.services.submissions as subs
-    import slack_sdk.webhook.async_client as whmod
-
-    async def _noop(*a, **k):
-        return None
-
-    monkeypatch.setattr(subs, "notify_reviewer", _noop)
-    monkeypatch.setattr(subs, "notify_student_of_review", _noop)
-    monkeypatch.setattr(slackmod, "send_dm", _noop)
-
-    class _FakeWebhook:
-        def __init__(self, *a, **k):
-            pass
-
-        async def send(self, *a, **k):
-            return None
-
-    monkeypatch.setattr(whmod, "AsyncWebhookClient", _FakeWebhook)
 
 
 async def _make_signup(db, make_student, make_opportunity, make_shift, opp_reviewer=None):

@@ -8,6 +8,7 @@ per-connection and would appear empty).
 from datetime import datetime, timedelta
 from typing import Optional
 
+import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -160,3 +161,30 @@ async def authed_client(client):
 
     client.cookies.set(SSO_COOKIE, make_sso_cookie())
     return client
+
+
+@pytest.fixture
+def hush_slack(monkeypatch):
+    """Silence outbound Slack calls (webhooks / DMs / reviewer notify). notify_reviewer
+    and notify_student_of_review open their own real AsyncSessionLocal (bypassing the
+    test DB override), so any route that schedules them as a background task needs
+    this fixture even if the notification itself would've no-op'd (e.g. no slack_user_id)."""
+    import app.routers.slack as slackmod
+    import app.services.submissions as subs
+    import slack_sdk.webhook.async_client as whmod
+
+    async def _noop(*a, **k):
+        return None
+
+    monkeypatch.setattr(subs, "notify_reviewer", _noop)
+    monkeypatch.setattr(subs, "notify_student_of_review", _noop)
+    monkeypatch.setattr(slackmod, "send_dm", _noop)
+
+    class _FakeWebhook:
+        def __init__(self, *a, **k):
+            pass
+
+        async def send(self, *a, **k):
+            return None
+
+    monkeypatch.setattr(whmod, "AsyncWebhookClient", _FakeWebhook)

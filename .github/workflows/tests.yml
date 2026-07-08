@@ -9,6 +9,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # slack_signing_secret defaults to blank, and _verify_slack_signature fails closed
+    # (503) when it's blank — tests compute their own Slack signature from whatever
+    # this is set to, so any non-blank placeholder here makes both sides agree.
+    env:
+      SLACK_SIGNING_SECRET: ci-placeholder-signing-secret
     steps:
       - uses: actions/checkout@v6
 

@@ -217,7 +217,7 @@ async def test_submit_lists_only_outstanding_shifts(
 
 
 async def test_submit_shift_logs_hours_idempotently(
-    client, db, make_student, make_mentor, make_opportunity, make_shift
+    client, db, hush_slack, make_student, make_mentor, make_opportunity, make_shift
 ):
     from sqlalchemy import func, select
     from app.models import HourSubmission, Signup, SignupStatus, SubmissionStatus
