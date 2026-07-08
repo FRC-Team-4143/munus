@@ -57,7 +57,7 @@ cp .env.example .env              # then fill in your values
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
-- Student portal: `http://localhost:8001/`
+- Student portal: `http://localhost:8001/me` (`/` redirects to it)
 - Admin UI: `http://localhost:8001/admin` — signs in through Legion; no local password
 
 On first start the database is created and the per-level requirements are seeded. Run
@@ -185,9 +185,12 @@ in the app.
   username, then sends the browser to Legion's `/sso/pending/{nonce}` "check Slack" page.
 - **Portal ↔ admin cross-navigation** — since both surfaces read the same `mw_sso`
   cookie, a student who also holds `munus-admin`/`munus-manager` sees an **Admin** link
-  in the portal nav, and an admin/manager whose Legion role is `student` sees a
-  **My Dashboard** link in the admin sidebar. Both are plain links (no separate sign-in
-  step) — group/role checks are read straight from the live SSO claims.
+  in the portal nav plus an "Open admin area" card on the dashboard, and an admin/manager
+  whose Legion role is `student` sees a **My Dashboard** link in the admin sidebar. Both
+  are plain links (no separate sign-in step) — group/role checks are read straight from
+  the live SSO claims.
+- **Dashboard route** — the student dashboard is canonically **`/me`** (matching Tempus);
+  `/` 307-redirects to it, and sign-out is `/me/logout`.
 
 ---
 
@@ -240,7 +243,7 @@ app/
 ├── utils.py           # Timezone helpers + shift-range formatting
 ├── routers/
 │   ├── admin.py        # /admin — Legion-SSO-gated management UI (munus-admin/manager groups)
-│   ├── portal.py        # / — student-facing portal (Legion SSO too — see legion_sync.py)
+│   ├── portal.py        # /me — student-facing portal (/ redirects here; Legion SSO too)
 │   └── slack.py         # /slack — /vhours slash command + interactive Approve/Reject
 ├── services/
 │   ├── opportunities.py # Shift capacity checks, signup/cancel logic, new-opportunity announce

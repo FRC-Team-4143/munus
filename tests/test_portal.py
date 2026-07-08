@@ -52,7 +52,7 @@ async def test_unmatched_member_code_shows_identify_page(client):
     still shows the sign-in page (with the Sign in button, since resolve_return_to
     needs it), but now says why instead of looking like sign-in silently failed."""
     client.cookies.set(SSO_COOKIE, make_sso_cookie(role="student", member_code="nope", groups=()))
-    resp = await client.get("/")
+    resp = await client.get("/me")
     assert resp.status_code == 200
     assert "Sign in with Legion" in resp.text
     assert "don't have an active student record" in resp.text
@@ -69,7 +69,7 @@ async def test_mentor_visiting_portal_home_sees_wrong_role_message(client):
     used to just silently re-show the same sign-in page, indistinguishable from sign-in
     having failed outright. It now says who they're signed in as and points at /admin."""
     client.cookies.set(SSO_COOKIE, make_sso_cookie(role="mentor", name="Coach Ray", groups=()))
-    resp = await client.get("/")
+    resp = await client.get("/me")
     assert resp.status_code == 200
     assert "Coach Ray" in resp.text
     assert "students only" in resp.text
@@ -78,7 +78,7 @@ async def test_mentor_visiting_portal_home_sees_wrong_role_message(client):
 
 async def test_signed_out_visitor_sees_plain_signin_prompt(client):
     """No cookie at all — the baseline case must not show either error message."""
-    resp = await client.get("/")
+    resp = await client.get("/me")
     assert resp.status_code == 200
     assert "Sign in with Legion" in resp.text
     assert "students only" not in resp.text
@@ -113,13 +113,16 @@ async def test_enter_no_member_falls_back_to_legion_authorize(client):
 
 
 async def test_enter_known_member_redirects_to_pending_page(client, make_student, monkeypatch):
+    from app.config import settings
     from app.services import legion_auth
 
     student = await make_student(code="zzz00002")
 
     async def fake_start_challenge(member_code, *, return_to="/"):
         assert member_code == student.member_code
-        assert return_to == "/submit"
+        # Absolute — Legion's /sso/complete redirects to return_to as-is, and a bare
+        # relative path would resolve against Legion's own host on this cookie-less path.
+        assert return_to == f"{settings.base_url}/submit"
         return "http://legion.test/sso/pending/abc123"
 
     monkeypatch.setattr(legion_auth, "start_challenge", fake_start_challenge)
@@ -156,7 +159,7 @@ async def test_dashboard_shows_projected_hours(client, db, make_student, make_op
     await db.commit()
 
     await _identify(client, "proj0001")
-    home = await client.get("/")
+    home = await client.get("/me")
     assert home.status_code == 200
     assert "Projected" in home.text  # projected caption/segment shown
 
@@ -323,12 +326,35 @@ async def test_portal_admin_link_shown_for_manager_student(client, make_student)
     client.cookies.set(SSO_COOKIE, make_sso_cookie(
         role="student", member_code=student.member_code, groups=("munus-manager",),
     ))
-    resp = await client.get("/")
+    resp = await client.get("/me")
     assert '<a class="nav-link" href="/admin">' in resp.text
 
 
 async def test_portal_admin_link_hidden_for_plain_student(client, make_student):
     student = await make_student(code="plain001")
     await _identify(client, "plain001")
-    resp = await client.get("/")
+    resp = await client.get("/me")
     assert '<a class="nav-link" href="/admin">' not in resp.text
+
+
+async def test_root_redirects_to_me(client):
+    """The dashboard is canonically /me (matching Tempus); / just redirects to it."""
+    resp = await client.get("/", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/me"
+
+
+async def test_dashboard_shows_admin_card_for_staff(client, make_student):
+    student = await make_student(code="adm00001")
+    client.cookies.set(SSO_COOKIE, make_sso_cookie(
+        role="student", member_code=student.member_code, groups=("munus-admin",),
+    ))
+    resp = await client.get("/me")
+    assert "Open admin area" in resp.text
+
+
+async def test_dashboard_hides_admin_card_for_plain_student(client, make_student):
+    await make_student(code="plain002")
+    await _identify(client, "plain002")
+    resp = await client.get("/me")
+    assert "Open admin area" not in resp.text

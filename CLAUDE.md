@@ -95,13 +95,21 @@ for the whole app; no Munus-specific cookie or password exists anywhere.
   member without making them type a Legion username, then redirects to Legion's
   `GET /sso/pending/{nonce}` "check Slack" page (reuses the existing `sso/pending.html`
   polling flow — it doesn't care whether the `AuthRequest` came from the username form
-  or the API). `safe_next()` in `legion_auth.py` blocks open redirects.
+  or the API). `safe_next()` in `legion_auth.py` blocks open redirects. The challenge is
+  started with an **absolute** `return_to` (`{BASE_URL}{next}`) — Legion's
+  `/sso/complete` redirects to `return_to` as-is, and a bare relative path would resolve
+  against *Legion's* own host on this cookie-less path rather than Munus's. Mirrors
+  Tempus's `/enter`.
 - **Portal ↔ admin cross-navigation:** trivial since both read the same live `mw_sso`
   claims — no bridging route or synced group data needed. `portal/base.html` shows an
-  **Admin** link when `session_identity(request).groups` intersects
-  `{munus-admin, munus-manager}`; `admin/base.html` shows a **My Dashboard** link when
+  **Admin** link (navbar) **and** a prominent "Open admin area" card on the dashboard when
+  `session_identity(request).groups` intersects `{munus-admin, munus-manager}`;
+  `admin/base.html` shows a **My Dashboard** link when
   `session_identity(request).role == "student"`. Both link straight across (`/admin`,
-  `/`) since the shared cookie already grants access on the other side.
+  `/me`) since the shared cookie already grants access on the other side.
+- **Dashboard route is `/me`:** the student dashboard is canonically **`/me`** (matching
+  Tempus), with `/` a 307 redirect to it and logout at `/me/logout`. (`/my-hours` — the
+  full submission history — is separate and unchanged.)
 
 ## Key Conventions
 

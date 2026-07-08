@@ -138,7 +138,14 @@ async def _season_progress(db: AsyncSession, student: Student) -> dict:
 
 # ── Landing / identify ─────────────────────────────────────────────────────────
 
-@router.get("/", response_class=HTMLResponse)
+@router.get("/")
+async def root():
+    # The personal dashboard is canonically `/me` (matching Tempus); keep `/` working as
+    # a redirect to it so old links and bookmarks don't break.
+    return RedirectResponse("/me", status_code=307)
+
+
+@router.get("/me", response_class=HTMLResponse)
 async def index(request: Request, db: AsyncSession = Depends(get_db)):
     student = await _current_student(request, db)
     if not student:
@@ -183,7 +190,7 @@ async def index(request: Request, db: AsyncSession = Depends(get_db)):
 
 @router.get("/enter")
 async def enter(
-    request: Request, member: str = "", next: str = "/", db: AsyncSession = Depends(get_db)
+    request: Request, member: str = "", next: str = "/me", db: AsyncSession = Depends(get_db)
 ):
     """One-tap sign-in bootstrap — Slack links (`/vhours`, the opportunity-announcement
     button) point here with a known Legion `member_code`. If the browser already holds a
@@ -192,6 +199,11 @@ async def enter(
     SSO challenge for that member (services/legion_auth.py) and send the browser to the
     "check Slack" pending page; an unrecognized/missing member falls back to Legion's
     normal username-entry sign-in.
+
+    The challenge branch passes an **absolute** `return_to` (mirroring Tempus's `/enter`):
+    Legion's `/sso/complete` redirects to `return_to` as-is, and a bare relative path would
+    resolve against *Legion's* host on this cookie-less path, not Munus's — so the fresh
+    sign-in would silently land on Legion instead of back here.
     """
     next_path = safe_next(next)
     if sso_identity(request) is not None:
@@ -207,7 +219,9 @@ async def enter(
     if student is None:
         return RedirectResponse(make_authorize_url(request, return_to=next_path), status_code=303)
 
-    pending_url = await legion_auth.start_challenge(student.member_code, return_to=next_path)
+    pending_url = await legion_auth.start_challenge(
+        student.member_code, return_to=f"{settings.base_url}{next_path}"
+    )
     if pending_url is None:
         return templates.TemplateResponse(
             "portal/sso_unavailable.html", {"request": request}, status_code=503
@@ -215,11 +229,11 @@ async def enter(
     return RedirectResponse(pending_url, status_code=303)
 
 
-@router.get("/logout")
+@router.get("/me/logout")
 async def logout(request: Request):
     # Single logout: bounce to Legion's /sso/logout, which clears the shared `mw_sso`
     # cookie for every sibling app — including /admin.
-    return RedirectResponse(logout_url(request, return_to="/"), status_code=303)
+    return RedirectResponse(logout_url(request, return_to="/me"), status_code=303)
 
 
 # ── Opportunities ──────────────────────────────────────────────────────────────

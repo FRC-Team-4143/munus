@@ -45,13 +45,13 @@
 <body>
 {% block nav %}
 <nav class="navbar navbar-expand-md px-3 mb-4">
-  <a class="navbar-brand" href="/">Munus</a>
+  <a class="navbar-brand" href="/me">Munus</a>
   <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav">
     <span class="navbar-toggler-icon"></span>
   </button>
   <div class="collapse navbar-collapse" id="nav">
     <ul class="navbar-nav me-auto">
-      <li class="nav-item"><a class="nav-link {% if active_page == 'home' %}active{% endif %}" href="/">Home</a></li>
+      <li class="nav-item"><a class="nav-link {% if active_page == 'home' %}active{% endif %}" href="/me">Home</a></li>
       <li class="nav-item"><a class="nav-link {% if active_page == 'opportunities' %}active{% endif %}" href="/opportunities">Opportunities</a></li>
       <li class="nav-item"><a class="nav-link {% if active_page == 'submit' %}active{% endif %}" href="/submit">Submit Hours</a></li>
       <li class="nav-item"><a class="nav-link {% if active_page == 'my_hours' %}active{% endif %}" href="/my-hours">My Hours</a></li>
@@ -62,7 +62,7 @@
       {% if identity and identity.groups and (('munus-admin' in identity.groups) or ('munus-manager' in identity.groups)) %}
       <li class="nav-item"><a class="nav-link" href="/admin"><i class="bi bi-shield-lock"></i> Admin</a></li>
       {% endif %}
-      <li class="nav-item"><a class="nav-link" href="/logout"><i class="bi bi-box-arrow-right"></i> Sign out</a></li>
+      <li class="nav-item"><a class="nav-link" href="/me/logout"><i class="bi bi-box-arrow-right"></i> Sign out</a></li>
     </ul>
   </div>
 </nav>
