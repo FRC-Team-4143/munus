@@ -8,7 +8,19 @@
     <div class="card-body p-4 text-center">
       <h1 class="mb-1" style="color:#cc2200; font-style:italic; font-weight:700;">Munus</h1>
       <p class="text-muted mb-4">Sign in with your Legion account.</p>
-      {% if error %}<div class="alert alert-danger py-2 text-start">{{ error }}</div>{% endif %}
+      {% if wrong_role %}
+      <div class="alert alert-danger py-2 text-start">
+        You're signed in as <strong>{{ signed_in_name }}</strong>, but this page is for
+        students only. Looking for the admin area? <a href="/admin">Go to /admin</a>.
+      </div>
+      {% elif not_synced %}
+      <div class="alert alert-danger py-2 text-start">
+        We don't have an active student record for you yet — this usually resolves after
+        the next roster sync from Legion. Ask an admin if it persists.
+      </div>
+      {% elif error %}
+      <div class="alert alert-danger py-2 text-start">{{ error }}</div>
+      {% endif %}
       <a href="{{ authorize_url }}" class="btn btn-primary w-100">
         <i class="bi bi-slack me-1"></i> Sign in with Legion
       </a>

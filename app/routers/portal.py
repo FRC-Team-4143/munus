@@ -142,10 +142,18 @@ async def _season_progress(db: AsyncSession, student: Student) -> dict:
 async def index(request: Request, db: AsyncSession = Depends(get_db)):
     student = await _current_student(request, db)
     if not student:
-        return templates.TemplateResponse(
-            "portal/identify.html",
-            {"request": request, "authorize_url": make_authorize_url(request)},
-        )
+        # Signed in via Legion but doesn't qualify for the student portal — say why,
+        # rather than silently re-showing the same "Sign in with Legion" button (which
+        # looks like the sign-in itself failed when it actually succeeded).
+        identity = sso_identity(request)
+        context = {"request": request, "authorize_url": make_authorize_url(request)}
+        if identity is not None:
+            if identity.get("role") != "student":
+                context["wrong_role"] = True
+                context["signed_in_name"] = identity.get("name") or "that account"
+            else:
+                context["not_synced"] = True
+        return templates.TemplateResponse("portal/identify.html", context)
 
     progress = await _season_progress(db, student)
     recent = (

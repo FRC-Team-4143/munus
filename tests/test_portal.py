@@ -49,17 +49,40 @@ async def test_portal_requires_identity(client):
 
 async def test_unmatched_member_code_shows_identify_page(client):
     """An SSO identity that doesn't match any local Student row (e.g. not yet synced)
-    is treated the same as being signed out — the dashboard just shows the sign-in page."""
+    still shows the sign-in page (with the Sign in button, since resolve_return_to
+    needs it), but now says why instead of looking like sign-in silently failed."""
     client.cookies.set(SSO_COOKIE, make_sso_cookie(role="student", member_code="nope", groups=()))
     resp = await client.get("/")
     assert resp.status_code == 200
     assert "Sign in with Legion" in resp.text
+    assert "don't have an active student record" in resp.text
 
 
 async def test_mentor_identity_cannot_reach_portal(client):
     client.cookies.set(SSO_COOKIE, make_sso_cookie(role="mentor", groups=()))
     resp = await client.get("/opportunities")
     assert resp.status_code == 303
+
+
+async def test_mentor_visiting_portal_home_sees_wrong_role_message(client):
+    """Regression test: a mentor clicking "Sign in with Legion" on the student portal
+    used to just silently re-show the same sign-in page, indistinguishable from sign-in
+    having failed outright. It now says who they're signed in as and points at /admin."""
+    client.cookies.set(SSO_COOKIE, make_sso_cookie(role="mentor", name="Coach Ray", groups=()))
+    resp = await client.get("/")
+    assert resp.status_code == 200
+    assert "Coach Ray" in resp.text
+    assert "students only" in resp.text
+    assert 'href="/admin"' in resp.text
+
+
+async def test_signed_out_visitor_sees_plain_signin_prompt(client):
+    """No cookie at all — the baseline case must not show either error message."""
+    resp = await client.get("/")
+    assert resp.status_code == 200
+    assert "Sign in with Legion" in resp.text
+    assert "students only" not in resp.text
+    assert "active student record" not in resp.text
 
 
 async def test_enter_already_signed_in_skips_legion_challenge(client, make_student, monkeypatch):
