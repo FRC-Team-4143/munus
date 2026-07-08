@@ -212,16 +212,18 @@ async def test_manager_role_scoped_to_opportunities(client):
     cr = await client.post("/admin/opportunities", data={"name": "Mgr Opp"}, follow_redirects=False)
     assert cr.status_code == 303 and "/admin/opportunities/" in cr.headers["location"]
 
-    # Blocked from every admin-only section → bounced to Opportunities.
+    # Blocked from every admin-only section — stays in the admin shell with a
+    # blur-blocked "No Access" page rather than being silently redirected away
+    # (regression test: it used to 303 to Opportunities with no explanation).
     for path in ("/admin", "/admin/roster", "/admin/submissions", "/admin/settings", "/admin/backup", "/admin/report"):
         resp = await client.get(path, follow_redirects=False)
-        assert resp.status_code == 303
-        assert resp.headers["location"] == "/admin/opportunities", path
+        assert resp.status_code == 403, path
+        assert "No Access" in resp.text, path
 
-    # Sidebar hides admin sections for a manager.
+    # Sidebar shows every section to every tier, regardless of access.
     page = await client.get("/admin/opportunities")
-    assert "/admin/roster" not in page.text
-    assert "/admin/backup" not in page.text
+    assert "/admin/roster" in page.text
+    assert "/admin/backup" in page.text
     assert "/admin/opportunities" in page.text
 
 
