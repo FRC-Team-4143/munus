@@ -475,6 +475,39 @@ async def admin_shift_create(
     return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
 
 
+@router.post("/shifts/{shift_id}/edit")
+async def admin_shift_edit(
+    shift_id: int,
+    request: Request,
+    start_time: str = Form(...),
+    end_time: str = Form(...),
+    capacity: int = Form(0),
+    notes: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    if redirect := _require_auth(request):
+        return redirect
+    shift = (await db.execute(select(Shift).where(Shift.id == shift_id))).scalars().first()
+    if not shift:
+        return RedirectResponse("/admin/opportunities", status_code=303)
+
+    start_dt = local_to_utc(datetime.fromisoformat(start_time))
+    end_dt = local_to_utc(datetime.fromisoformat(end_time))
+    if end_dt <= start_dt:
+        return RedirectResponse(
+            f"/admin/opportunities/{shift.opportunity_id}/edit?error=Shift+end+time+must+be+after+its+start+time.",
+            status_code=303,
+        )
+
+    shift.start_time = start_dt
+    shift.end_time = end_dt
+    shift.capacity = capacity
+    shift.notes = notes.strip() if notes else None
+    await audit.record(db, request, "shift.edit", f"Edited shift {shift_id}", entity_type="shift", entity_id=shift_id)
+    await db.commit()
+    return RedirectResponse(f"/admin/opportunities/{shift.opportunity_id}/edit", status_code=303)
+
+
 @router.post("/shifts/{shift_id}/reviewer")
 async def admin_shift_reviewer(
     shift_id: int,

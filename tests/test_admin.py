@@ -331,6 +331,76 @@ async def test_shift_create_rejects_end_before_start(client, db, make_opportunit
     assert count == 0
 
 
+async def test_admin_edit_shift_updates_fields(client, db, make_opportunity, make_shift):
+    from datetime import datetime
+    from app.utils import local_to_utc
+
+    await _login(client)
+    opp = await make_opportunity()
+    shift = await make_shift(opp.id, capacity=2)
+
+    resp = await client.post(
+        f"/admin/shifts/{shift.id}/edit",
+        data={
+            "start_time": "2026-09-01T09:00", "end_time": "2026-09-01T13:00",
+            "capacity": "10", "notes": "Bring water",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == f"/admin/opportunities/{opp.id}/edit"
+
+    await db.refresh(shift)
+    assert shift.capacity == 10
+    assert shift.notes == "Bring water"
+    assert shift.start_time == local_to_utc(datetime(2026, 9, 1, 9, 0))
+    assert shift.end_time == local_to_utc(datetime(2026, 9, 1, 13, 0))
+
+
+async def test_admin_edit_shift_rejects_end_before_start(client, db, make_opportunity, make_shift):
+    """Editing a shift is held to the same start/end ordering as creating one, and
+    leaves the existing row untouched on rejection."""
+    await _login(client)
+    opp = await make_opportunity()
+    shift = await make_shift(opp.id, start_in_hours=24, length_hours=3)
+    original_start = shift.start_time
+
+    resp = await client.post(
+        f"/admin/shifts/{shift.id}/edit",
+        data={"start_time": "2026-08-01T15:00", "end_time": "2026-08-01T14:00", "capacity": "0"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert "error=" in resp.headers["location"]
+
+    await db.refresh(shift)
+    assert shift.start_time == original_start
+
+
+async def test_admin_edit_shift_requires_auth(client, db, make_opportunity, make_shift):
+    opp = await make_opportunity()
+    shift = await make_shift(opp.id)
+    resp = await client.post(
+        f"/admin/shifts/{shift.id}/edit",
+        data={"start_time": "2026-09-01T09:00", "end_time": "2026-09-01T13:00", "capacity": "0"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert "sso/authorize" in resp.headers["location"]
+
+
+async def test_opportunity_edit_page_shows_edit_shift_modal(client, db, make_opportunity, make_shift):
+    """The shift's current values are pre-filled into its edit modal."""
+    await _login(client)
+    opp = await make_opportunity()
+    shift = await make_shift(opp.id, capacity=4)
+
+    resp = await client.get(f"/admin/opportunities/{opp.id}/edit")
+    assert resp.status_code == 200
+    assert f'id="editShift{shift.id}"' in resp.text
+    assert f'value="{shift.capacity}"' in resp.text
+
+
 async def test_roster_sync_now_button(client, monkeypatch):
     import app.routers.admin as adminmod
 
