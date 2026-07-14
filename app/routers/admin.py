@@ -68,8 +68,15 @@ _MANAGER_GROUP = "munus-manager"
 
 
 def _manager_allowed(path: str) -> bool:
-    """The only routes a 'manager' may reach: creating/managing opportunities and shifts."""
+    """The routes a 'manager' may reach: creating/managing opportunities and shifts.
+
+    Excludes the irreversible `/purge` (which deletes an opportunity *and* every hour
+    submission logged against it, dropping those hours from students' season totals) —
+    that stays full-admin-only, like roster/submissions/settings/backup. Reversible
+    actions (create/edit/archive/restore) remain open to managers."""
     p = path.rstrip("/")
+    if p.endswith("/purge"):
+        return False
     return (
         p == "/admin/opportunities"
         or p.startswith("/admin/opportunities/")

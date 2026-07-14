@@ -204,6 +204,22 @@ async def test_opportunity_notify_dms_upcoming_signups(
     assert "Team polo" in calls[0][1]  # attire included
 
 
+def test_manager_allowed_excludes_purge():
+    """Managers may create/manage opportunities and shifts, but the irreversible purge is
+    admin-only — it deletes hour submissions, so it doesn't belong in the manager scope."""
+    from app.routers.admin import _manager_allowed
+
+    assert _manager_allowed("/admin/opportunities") is True
+    assert _manager_allowed("/admin/opportunities/5/edit") is True
+    assert _manager_allowed("/admin/opportunities/5/archive") is True
+    assert _manager_allowed("/admin/shifts/3/edit") is True
+    # Purge is excluded, with or without a trailing slash.
+    assert _manager_allowed("/admin/opportunities/5/purge") is False
+    assert _manager_allowed("/admin/opportunities/5/purge/") is False
+    # Unrelated admin sections remain manager-forbidden.
+    assert _manager_allowed("/admin/submissions") is False
+
+
 async def test_manager_role_scoped_to_opportunities(client):
     await _login(client, groups=("munus-manager",))
 
@@ -211,6 +227,15 @@ async def test_manager_role_scoped_to_opportunities(client):
     assert (await client.get("/admin/opportunities")).status_code == 200
     cr = await client.post("/admin/opportunities", data={"name": "Mgr Opp"}, follow_redirects=False)
     assert cr.status_code == 303 and "/admin/opportunities/" in cr.headers["location"]
+
+    # ...but NOT the irreversible purge, which permanently deletes an opportunity and
+    # every hour submission logged against it — that stays full-admin-only even though it
+    # lives under /admin/opportunities/. The reversible archive toggle is still allowed.
+    oid = cr.headers["location"].split("/admin/opportunities/")[1].split("/")[0]
+    pr = await client.post(f"/admin/opportunities/{oid}/purge", follow_redirects=False)
+    assert pr.status_code == 403 and "No Access" in pr.text
+    ar = await client.post(f"/admin/opportunities/{oid}/archive", follow_redirects=False)
+    assert ar.status_code == 303
 
     # Blocked from every admin-only section — stays in the admin shell with a
     # blur-blocked "No Access" page rather than being silently redirected away
