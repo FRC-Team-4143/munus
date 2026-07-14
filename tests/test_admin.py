@@ -32,6 +32,12 @@ async def test_admin_pages_render(client, path):
     assert resp.status_code == 200
 
 
+async def test_admin_page_has_favicon(client):
+    await _login(client)
+    resp = await client.get("/admin")
+    assert '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">' in resp.text
+
+
 async def test_send_prompt_button_dms_signed_up_students(
     client, db, monkeypatch, make_student, make_opportunity, make_shift
 ):
@@ -381,6 +387,60 @@ async def test_shift_create_rejects_end_before_start(client, db, make_opportunit
     assert "error=" in resp.headers["location"]
     count = (await db.execute(select(func.count()).select_from(Shift))).scalar_one()
     assert count == 0
+
+
+async def test_admin_create_continuous_opportunity_hides_shift_ui(client, db):
+    from app.models import Opportunity
+
+    await _login(client)
+    resp = await client.post("/admin/opportunities", data={
+        "name": "CAD Subteam", "is_continuous": "true",
+    }, follow_redirects=False)
+    assert resp.status_code == 303
+    edit_url = resp.headers["location"]
+
+    opp = (await db.execute(select(Opportunity).where(Opportunity.name == "CAD Subteam"))).scalars().first()
+    assert opp.is_continuous is True
+
+    edit = await client.get(edit_url)
+    assert edit.status_code == 200
+    assert "ongoing activity" in edit.text.lower()
+    assert "Add Shift" not in edit.text
+
+
+async def test_admin_create_opportunity_defaults_to_shift_based(client, db):
+    from app.models import Opportunity
+
+    await _login(client)
+    resp = await client.post("/admin/opportunities", data={"name": "Food Drive"}, follow_redirects=False)
+    edit_url = resp.headers["location"]
+
+    opp = (await db.execute(select(Opportunity).where(Opportunity.name == "Food Drive"))).scalars().first()
+    assert opp.is_continuous is False
+
+    edit = await client.get(edit_url)
+    assert "Add Shift" in edit.text
+
+
+async def test_admin_edit_opportunity_toggles_is_continuous(client, db, make_opportunity):
+    from app.models import Opportunity
+
+    await _login(client)
+    opp = await make_opportunity(name="Outreach Committee")
+    assert opp.is_continuous is False
+
+    resp = await client.post(f"/admin/opportunities/{opp.id}/edit", data={
+        "name": "Outreach Committee", "is_continuous": "true",
+    }, follow_redirects=False)
+    assert resp.status_code == 303
+
+    await db.refresh(opp)
+    assert opp.is_continuous is True
+
+    # Unchecking (the checkbox is simply absent from the posted form) reverts it.
+    await client.post(f"/admin/opportunities/{opp.id}/edit", data={"name": "Outreach Committee"})
+    await db.refresh(opp)
+    assert opp.is_continuous is False
 
 
 async def test_admin_edit_shift_updates_fields(client, db, make_opportunity, make_shift):

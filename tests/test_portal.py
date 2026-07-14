@@ -42,6 +42,90 @@ async def test_identify_and_browse(client, make_student, make_mentor, make_oppor
     assert "Season total" in my_hours.text
 
 
+async def test_continuous_opportunity_shows_log_hours_form(client, make_student, make_opportunity):
+    await make_student(code="ada00001")
+    opp = await make_opportunity(name="CAD Subteam", is_continuous=True)
+
+    await _identify(client, "ada00001")
+
+    listing = await client.get("/opportunities")
+    assert listing.status_code == 200
+    assert "Ongoing Activities" in listing.text
+    assert "CAD Subteam" in listing.text
+
+    detail = await client.get(f"/opportunities/{opp.id}")
+    assert detail.status_code == 200
+    assert "Log Hours" in detail.text
+    assert "Sign up" not in detail.text
+
+
+async def test_log_continuous_hours_creates_pending_submission(
+    client, db, make_student, make_opportunity
+):
+    from sqlalchemy import select
+    from app.models import HourSubmission, SubmissionStatus
+
+    student = await make_student(code="ada00001")
+    opp = await make_opportunity(name="CAD Subteam", is_continuous=True)
+    await _identify(client, "ada00001")
+
+    resp = await client.post(
+        f"/opportunities/{opp.id}/log-hours",
+        data={"hours": "2.5", "report": "Designed a bracket"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert f"/opportunities/{opp.id}" in resp.headers["location"]
+
+    sub = (
+        await db.execute(select(HourSubmission).where(HourSubmission.student_id == student.id))
+    ).scalars().first()
+    assert sub is not None
+    assert sub.status == SubmissionStatus.pending
+    assert sub.shift_id is None
+    assert sub.opportunity_id == opp.id
+    assert sub.hours == 2.5
+
+    # Logging again is allowed — no idempotency guard for a continuous activity.
+    resp2 = await client.post(
+        f"/opportunities/{opp.id}/log-hours", data={"hours": "1.0"}, follow_redirects=False
+    )
+    assert resp2.status_code == 303
+    count = (
+        await db.execute(select(HourSubmission).where(HourSubmission.student_id == student.id))
+    ).scalars().all()
+    assert len(count) == 2
+
+
+async def test_log_hours_rejects_shift_based_opportunity(
+    client, db, make_student, make_opportunity
+):
+    from sqlalchemy import select
+    from app.models import HourSubmission
+
+    await make_student(code="ada00001")
+    opp = await make_opportunity(name="Food Drive")  # is_continuous defaults False
+    await _identify(client, "ada00001")
+
+    resp = await client.post(
+        f"/opportunities/{opp.id}/log-hours", data={"hours": "2.0"}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert (await db.execute(select(HourSubmission))).scalars().first() is None
+
+
+async def test_log_hours_rejects_non_positive_hours(client, make_student, make_opportunity):
+    await make_student(code="ada00001")
+    opp = await make_opportunity(name="CAD Subteam", is_continuous=True)
+    await _identify(client, "ada00001")
+
+    resp = await client.post(
+        f"/opportunities/{opp.id}/log-hours", data={"hours": "0"}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert "message=" in resp.headers["location"]
+
+
 async def test_portal_requires_identity(client):
     resp = await client.get("/opportunities")
     assert resp.status_code == 303  # redirected to landing

@@ -65,6 +65,24 @@ def resolve_reviewer_id(shift: Shift) -> Optional[int]:
     return None
 
 
+async def submit_opportunity_hours(
+    db: AsyncSession, student_id: int, opportunity: Opportunity, hours: float, report: Optional[str]
+) -> HourSubmission:
+    """Create a pending submission logged directly against a continuous (shift-less)
+    opportunity, routing to its default reviewer. Unlike `submit_shift_hours`, there's
+    no duplicate/idempotency guard — a student logging hours against an ongoing
+    activity is expected to do so repeatedly over the season, not once per occurrence."""
+    return await create_submission(
+        db,
+        student_id=student_id,
+        opportunity_id=opportunity.id,
+        shift_id=None,
+        hours=hours,
+        report=report,
+        reviewer_mentor_id=opportunity.reviewer_mentor_id,
+    )
+
+
 async def submit_shift_hours(
     db: AsyncSession, signup: Signup, hours: float, report: Optional[str]
 ) -> Optional[HourSubmission]:

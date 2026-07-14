@@ -272,6 +272,7 @@ async def admin_opportunities_create(
     attire: Optional[str] = Form(None),
     contact: Optional[str] = Form(None),
     reviewer_mentor_id: Optional[str] = Form(None),
+    is_continuous: bool = Form(False),
     db: AsyncSession = Depends(get_db),
 ):
     if redirect := _require_auth(request):
@@ -283,10 +284,15 @@ async def admin_opportunities_create(
         attire=attire.strip() if attire else None,
         contact=contact.strip() if contact else None,
         reviewer_mentor_id=_opt_id(reviewer_mentor_id),
+        is_continuous=is_continuous,
     )
     db.add(opp)
     await audit.record(db, request, "opportunity.create", f"Created opportunity {opp.name}", entity_type="opportunity")
     await db.commit()
+    # A continuous opportunity has no shifts to wait for — announce it right away
+    # (mirrors admin_shift_create's "first shift added" trigger for shift-based ones).
+    if is_continuous and settings.slack_announce_channel:
+        await announce_opportunity(opp)
     return RedirectResponse(f"/admin/opportunities/{opp.id}/edit", status_code=303)
 
 
@@ -324,6 +330,7 @@ async def admin_opportunities_edit_post(
     attire: Optional[str] = Form(None),
     contact: Optional[str] = Form(None),
     reviewer_mentor_id: Optional[str] = Form(None),
+    is_continuous: bool = Form(False),
     db: AsyncSession = Depends(get_db),
 ):
     if redirect := _require_auth(request):
@@ -336,6 +343,7 @@ async def admin_opportunities_edit_post(
         opp.attire = attire.strip() if attire else None
         opp.contact = contact.strip() if contact else None
         opp.reviewer_mentor_id = _opt_id(reviewer_mentor_id)
+        opp.is_continuous = is_continuous
         await audit.record(db, request, "opportunity.edit", f"Edited opportunity {opp.name}", entity_type="opportunity", entity_id=opp.id)
         await db.commit()
     return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)

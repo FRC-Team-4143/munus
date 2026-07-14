@@ -26,8 +26,27 @@
     </div>
   </div>
 
-  <!-- Shifts -->
+  <!-- Shifts, or a log-hours form for a continuous (shift-less) activity -->
   <div class="col-lg-7">
+    {% if shift_rows is none %}
+    <div class="card">
+      <div class="card-header"><i class="bi bi-arrow-repeat me-1"></i> Log Hours</div>
+      <div class="card-body">
+        <p class="text-muted small">This is an ongoing activity — log hours whenever you put in time, as often as you need to.</p>
+        <form method="post" action="/opportunities/{{ opp.id }}/log-hours" class="row g-2">
+          <div class="col-md-4">
+            <label class="form-label small">Hours</label>
+            <input type="number" step="0.25" min="0" name="hours" class="form-control" required>
+          </div>
+          <div class="col-12">
+            <label class="form-label small">What did you do? (optional)</label>
+            <textarea name="report" class="form-control" rows="2"></textarea>
+          </div>
+          <div class="col-12"><button type="submit" class="btn btn-primary btn-sm">Submit</button></div>
+        </form>
+      </div>
+    </div>
+    {% else %}
     <div class="card">
       <div class="card-header"><i class="bi bi-calendar-week me-1"></i> Shifts</div>
       <div class="card-body p-0">
@@ -67,6 +86,7 @@
       </div>
     </div>
     <p class="text-muted small mt-2">Already volunteered? <a href="/submit">Submit your hours</a>.</p>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

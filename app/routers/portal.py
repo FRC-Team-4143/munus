@@ -256,7 +256,11 @@ async def opportunities_list(request: Request, db: AsyncSession = Depends(get_db
 
     now = now_utc()
     cards = []
+    continuous_cards = []
     for opp in opps:
+        if opp.is_continuous:
+            continuous_cards.append({"opp": opp})
+            continue
         # Shifts that aren't fully over yet (upcoming or in progress) — what a student can
         # join. "Over" = both start and end have passed, so a shift stays visible even if
         # it has a bad end-before-start time.
@@ -268,7 +272,7 @@ async def opportunities_list(request: Request, db: AsyncSession = Depends(get_db
         })
     return templates.TemplateResponse(
         "portal/opportunities.html",
-        {"request": request, "student": student, "cards": cards},
+        {"request": request, "student": student, "cards": cards, "continuous_cards": continuous_cards},
     )
 
 
@@ -289,6 +293,13 @@ async def opportunity_detail(
     ).scalars().first()
     if not opp:
         return RedirectResponse("/opportunities", status_code=303)
+
+    if opp.is_continuous:
+        return templates.TemplateResponse(
+            "portal/opportunity.html",
+            {"request": request, "student": student, "opp": opp, "shift_rows": None,
+             "message": request.query_params.get("message")},
+        )
 
     now = now_utc()
     # Show shifts that aren't fully over yet — a shift in progress is still joinable and
@@ -325,6 +336,38 @@ async def opportunity_detail(
         "portal/opportunity.html",
         {"request": request, "student": student, "opp": opp, "shift_rows": shift_rows,
          "message": request.query_params.get("message")},
+    )
+
+
+@router.post("/opportunities/{opp_id}/log-hours")
+async def log_continuous_hours(
+    opp_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    hours: float = Form(...),
+    report: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    student = await _current_student(request, db)
+    if not student:
+        return RedirectResponse("/", status_code=303)
+
+    opp = (await db.execute(select(Opportunity).where(Opportunity.id == opp_id))).scalars().first()
+    if not opp or not opp.is_continuous or not opp.is_active:
+        return RedirectResponse("/opportunities", status_code=303)
+
+    if hours <= 0:
+        return RedirectResponse(
+            f"/opportunities/{opp_id}?message=Enter+a+positive+number+of+hours.", status_code=303
+        )
+
+    submission = await submission_service.submit_opportunity_hours(
+        db, student.id, opp, round(hours, 2), report.strip() if report and report.strip() else None
+    )
+    background_tasks.add_task(submission_service.notify_reviewer, submission.id)
+    return RedirectResponse(
+        f"/opportunities/{opp_id}?message=Logged+{submission.hours:g}+hrs+for+approval.",
+        status_code=303,
     )
 
 

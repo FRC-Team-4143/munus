@@ -39,6 +39,7 @@ async def init_db() -> None:
         # Additive column migrations run after create_all (safe on both fresh + existing).
         await conn.run_sync(_add_reviewer_columns)
         await conn.run_sync(_add_mentor_member_code_column)
+        await conn.run_sync(_add_opportunity_is_continuous_column)
 
     await _seed_level_requirements()
 
@@ -68,6 +69,18 @@ def _add_mentor_member_code_column(conn) -> None:
         conn.execute(text("ALTER TABLE mentors ADD COLUMN member_code VARCHAR(8)"))
         conn.execute(text(
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_mentors_member_code ON mentors (member_code)"
+        ))
+
+
+def _add_opportunity_is_continuous_column(conn) -> None:
+    """Add `is_continuous` to opportunities if not already present. No-op on a fresh
+    schema, which already has it from create_all()."""
+    from sqlalchemy import inspect, text
+    inspector = inspect(conn)
+    columns = [c["name"] for c in inspector.get_columns("opportunities")]
+    if "is_continuous" not in columns:
+        conn.execute(text(
+            "ALTER TABLE opportunities ADD COLUMN is_continuous BOOLEAN NOT NULL DEFAULT 0"
         ))
 
 

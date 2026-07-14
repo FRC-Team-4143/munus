@@ -125,6 +125,13 @@ class Opportunity(Base):
     reviewer_mentor_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("mentors.id"), nullable=True
     )
+    # A continuous activity (a standing team commitment that meets weekly/daily
+    # indefinitely, e.g. an ongoing subteam project) has no Shifts at all — students log
+    # hours against it directly (services.submissions.submit_opportunity_hours) instead
+    # of signing up for a dated shift. False = the existing shift/signup model.
+    is_continuous: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
 
     shifts: Mapped[List["Shift"]] = relationship(
         "Shift", back_populates="opportunity", cascade="all, delete-orphan"

@@ -41,14 +41,29 @@
               {% for m in mentors %}<option value="{{ m.id }}" {% if opp.reviewer_mentor_id == m.id %}selected{% endif %}>{{ m.name }}</option>{% endfor %}
             </select>
           </div>
+          <div class="form-check mb-3">
+            <input type="checkbox" class="form-check-input" name="is_continuous" value="true" id="edit_is_continuous" {% if opp.is_continuous %}checked{% endif %}>
+            <label class="form-check-label" for="edit_is_continuous">
+              This is an ongoing activity <small class="text-muted">(no scheduled shifts — students log hours anytime)</small>
+            </label>
+          </div>
           <button type="submit" class="btn btn-primary w-100">Save Details</button>
         </form>
       </div>
     </div>
   </div>
 
-  <!-- Shifts -->
+  <!-- Shifts (not applicable to a continuous/ongoing activity) -->
   <div class="col-lg-7">
+    {% if opp.is_continuous %}
+    <div class="card">
+      <div class="card-body text-muted">
+        This is an ongoing activity — students log hours directly from the opportunity
+        page, so there's nothing to schedule here. Uncheck "ongoing activity" to switch
+        back to scheduled shifts.
+      </div>
+    </div>
+    {% else %}
     <div class="card mb-4">
       <div class="card-header"><i class="bi bi-calendar-plus me-1"></i> Add Shift</div>
       <div class="card-body">
@@ -112,6 +127,7 @@
         {% endif %}
       </div>
     </div>
+    {% endif %}
   </div>
 </div>
 

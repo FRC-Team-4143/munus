@@ -4,7 +4,8 @@ from sqlalchemy.orm import selectinload
 from app.models import Opportunity, Shift, Signup, SignupStatus, SubmissionStatus
 from app.services.requirements import season_total_hours
 from app.services.submissions import (
-    create_submission, resolve_reviewer_id, set_status, submit_shift_hours,
+    create_submission, resolve_reviewer_id, set_status, submit_opportunity_hours,
+    submit_shift_hours,
 )
 from app.utils import shift_length_hours
 
@@ -123,6 +124,43 @@ async def test_submit_shift_hours_routes_to_resolved_reviewer(
 
     # Idempotent — a second tap does not create a duplicate.
     assert await submit_shift_hours(db, signup, default_hours, None) is None
+
+
+async def test_submit_opportunity_hours_creates_pending_submission(
+    db, make_student, make_mentor, make_opportunity
+):
+    mentor = await make_mentor(name="Reviewer", slack="U0REV")
+    opp = await make_opportunity(reviewer_mentor_id=mentor.id, is_continuous=True)
+    student = await make_student()
+
+    sub = await submit_opportunity_hours(db, student.id, opp, 2.0, "Worked on CAD")
+    assert sub.status == SubmissionStatus.pending
+    assert sub.shift_id is None
+    assert sub.opportunity_id == opp.id
+    assert sub.reviewer_mentor_id == mentor.id  # opportunity default, no shift to override it
+
+
+async def test_submit_opportunity_hours_allows_repeat_logging(db, make_student, make_opportunity):
+    """Unlike submit_shift_hours, there's no one-submission-per-shift idempotency
+    guard — repeated logging against an ongoing activity is expected."""
+    opp = await make_opportunity(is_continuous=True)
+    student = await make_student()
+
+    first = await submit_opportunity_hours(db, student.id, opp, 1.0, None)
+    second = await submit_opportunity_hours(db, student.id, opp, 1.5, None)
+    assert first.id != second.id
+
+
+async def test_submit_opportunity_hours_counts_toward_season_total(
+    db, make_student, make_opportunity
+):
+    """Confirms the shift-agnostic season-total query actually picks up a shift-less
+    submission once approved, not just trusting that it should."""
+    opp = await make_opportunity(is_continuous=True)
+    student = await make_student()
+    sub = await submit_opportunity_hours(db, student.id, opp, 4.0, None)
+    await set_status(db, sub.id, SubmissionStatus.approved)
+    assert await season_total_hours(db, student.id) == 4.0
 
 
 async def test_submit_shift_hours_shift_override_wins(
