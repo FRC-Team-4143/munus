@@ -11,6 +11,10 @@ def test_safe_next_blocks_open_redirects():
     assert legion_auth.safe_next("//evil.com") == "/"
     assert legion_auth.safe_next("https://evil.com") == "/"
     assert legion_auth.safe_next(None) == "/"
+    # A leading "/\" is normalized to "//" by some browsers (protocol-relative) — must be
+    # rejected too, matching Legion's own allowed_return_to guard.
+    assert legion_auth.safe_next("/\\evil.com") == "/"
+    assert legion_auth.safe_next("\\evil.com") == "/"
 
 
 class _FakeResponse:

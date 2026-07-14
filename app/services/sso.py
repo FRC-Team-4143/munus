@@ -65,8 +65,15 @@ def logout_url(request: Request, *, return_to: str = "/") -> str:
 # ── Open-redirect guard (mirrors Legion's `allowed_return_to`) ────────────────────
 
 def is_same_app_path(url: Optional[str]) -> bool:
-    """True only for a safe same-app relative path (leading '/', not protocol-relative)."""
+    """True only for a safe same-app relative path (leading '/', not protocol-relative).
+    Also rejects a leading '/\\', which some browsers normalize to '//' (mirrors
+    Legion's `allowed_return_to`)."""
     if not url:
         return False
     parsed = urlparse(url)
-    return not parsed.netloc and url.startswith("/") and not url.startswith("//")
+    return (
+        not parsed.netloc
+        and url.startswith("/")
+        and not url.startswith("//")
+        and not url.startswith("/\\")
+    )
