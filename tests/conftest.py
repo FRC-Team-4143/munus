@@ -115,9 +115,19 @@ async def make_shift(db):
 
 
 @pytest_asyncio.fixture
-async def client(session_factory):
-    """An httpx AsyncClient wired to the app with get_db overridden to the test DB."""
+async def client(session_factory, monkeypatch):
+    """An httpx AsyncClient wired to the app with get_db overridden to the test DB.
+
+    Also redirects app.database.AsyncSessionLocal to the same test engine:
+    services/submissions.py's notify_reviewer/notify_student_of_review background
+    tasks open their own session via a function-local `from app.database import
+    AsyncSessionLocal` instead of the request-injected get_db, since they run after
+    the request's own session is already closed. Without this, those code paths
+    would silently hit the real on-disk munus.db instead of the test's in-memory
+    DB — passing only by accident if a stray munus.db with tables already exists
+    locally, and reliably failing with "no such table" on a clean checkout (e.g. CI)."""
     import httpx
+    import app.database as database_module
     from app.main import app
 
     async def _override_get_db():
@@ -125,6 +135,7 @@ async def client(session_factory):
             yield session
 
     app.dependency_overrides[get_db] = _override_get_db
+    monkeypatch.setattr(database_module, "AsyncSessionLocal", session_factory)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
