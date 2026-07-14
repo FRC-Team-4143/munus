@@ -70,7 +70,7 @@ The app runs as a Docker container alongside Tempus behind an nginx reverse prox
 See the [apps-infra](https://github.com/FRC-Team-4143/apps-infra) repo for the full
 deployment setup and first-time server instructions.
 
-Accessible at **http://volunteer.marswars.org**.
+Accessible at **http://munus.marswars.org**.
 
 Pushing to `main` automatically deploys via GitHub Actions (tests must pass first).
 
