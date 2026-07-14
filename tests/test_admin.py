@@ -220,6 +220,33 @@ def test_manager_allowed_excludes_purge():
     assert _manager_allowed("/admin/submissions") is False
 
 
+async def test_decision_redirect_ignores_referer(
+    client, db, make_student, make_opportunity, hush_slack
+):
+    """The quick approve/reject redirect must go to a fixed path, never reflect the
+    untrusted Referer header into the Location."""
+    from app.models import HourSubmission, SubmissionStatus
+
+    await _login(client)
+    student = await make_student()
+    opp = await make_opportunity()
+    db.add(HourSubmission(
+        student_id=student.id, opportunity_id=opp.id, hours=3.0,
+        status=SubmissionStatus.pending,
+    ))
+    await db.commit()
+    sub = (await db.execute(select(HourSubmission))).scalars().first()
+
+    resp = await client.post(
+        f"/admin/submissions/{sub.id}/decision",
+        data={"decision": "approve"},
+        headers={"referer": "https://evil.example/phish"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/admin/submissions"
+
+
 async def test_manager_role_scoped_to_opportunities(client):
     await _login(client, groups=("munus-manager",))
 

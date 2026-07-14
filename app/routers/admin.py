@@ -808,7 +808,8 @@ async def admin_submissions_decision(
         )
         await db.commit()
         background_tasks.add_task(submission_service.notify_student_of_review, submission.id)
-    return RedirectResponse(request.headers.get("referer", "/admin/submissions"), status_code=303)
+    # Fixed destination — never reflect the untrusted Referer header into a redirect.
+    return RedirectResponse("/admin/submissions", status_code=303)
 
 
 @router.post("/submissions/{submission_id}/delete")
