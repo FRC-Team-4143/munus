@@ -16,7 +16,7 @@
     <div class="card">
       <div class="card-header"><i class="bi bi-info-circle me-1"></i> Details</div>
       <div class="card-body">
-        {% if opp.description %}<p>{{ opp.description }}</p>{% endif %}
+        {% if opp.description %}<p style="white-space: pre-line;">{{ opp.description }}</p>{% endif %}
         <dl class="row mb-0 small">
           <dt class="col-4 text-muted">Location</dt><dd class="col-8">{{ opp.location or '—' }}</dd>
           <dt class="col-4 text-muted">Attire</dt><dd class="col-8">{{ opp.attire or '—' }}</dd>

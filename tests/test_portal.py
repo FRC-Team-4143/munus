@@ -126,6 +126,26 @@ async def test_log_hours_rejects_non_positive_hours(client, make_student, make_o
     assert "message=" in resp.headers["location"]
 
 
+async def test_opportunity_detail_preserves_description_line_breaks(
+    client, make_student, make_opportunity
+):
+    """Multi-paragraph descriptions (e.g. pasted from a Slack-formatted announcement)
+    must not collapse into one run-on paragraph — HTML collapses newlines by default,
+    so the template needs white-space: pre-line to preserve them."""
+    await make_student(code="ada00001")
+    opp = await make_opportunity(
+        name="CREW309 Boat Handling System",
+        description="First paragraph.\n\nSecond paragraph.",
+        is_continuous=True,
+    )
+    await _identify(client, "ada00001")
+
+    resp = await client.get(f"/opportunities/{opp.id}")
+    assert resp.status_code == 200
+    assert "white-space: pre-line" in resp.text
+    assert "First paragraph.\n\nSecond paragraph." in resp.text
+
+
 async def test_portal_requires_identity(client):
     resp = await client.get("/opportunities")
     assert resp.status_code == 303  # redirected to landing
