@@ -148,7 +148,34 @@ async def test_opportunity_detail_preserves_description_line_breaks(
 
 async def test_portal_requires_identity(client):
     resp = await client.get("/opportunities")
-    assert resp.status_code == 303  # redirected to landing
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/me?next=%2Fopportunities"
+
+
+async def test_signed_out_redirect_remembers_destination_through_signin(
+    client, make_student, make_opportunity
+):
+    """A signed-out visit to a protected page must not lose the destination — the old
+    behavior bounced straight to "/", which meant a freshly-signed-in visitor always
+    landed on the dashboard instead of back on the page they wanted."""
+    opp = await make_opportunity(name="CAD Subteam", is_continuous=True)
+
+    first = await client.get(f"/opportunities/{opp.id}", follow_redirects=False)
+    assert first.status_code == 303
+    assert first.headers["location"] == f"/me?next=%2Fopportunities%2F{opp.id}"
+
+    second = await client.get(first.headers["location"])
+    assert second.status_code == 200
+    assert f"return_to=%2Fopportunities%2F{opp.id}" in second.text
+
+
+async def test_signin_redirect_falls_back_for_post_only_actions(client, make_opportunity):
+    """A signed-out POST to an action endpoint (not itself a page) redirects to a
+    sensible related page rather than the POST URL, which isn't GET-navigable."""
+    opp = await make_opportunity(name="Food Drive")
+    resp = await client.post(f"/opportunities/{opp.id}/log-hours", data={"hours": "1"}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == f"/me?next=%2Fopportunities%2F{opp.id}"
 
 
 async def test_unmatched_member_code_shows_identify_page(client):

@@ -10,6 +10,7 @@ no Slack context falls back to Legion's normal sign-in.
 """
 from datetime import datetime, timedelta
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -59,6 +60,14 @@ async def _current_student(request: Request, db: AsyncSession) -> Optional[Stude
     if student is None or not student.is_active:
         return None
     return student
+
+
+def _signin_redirect(next_path: str) -> RedirectResponse:
+    """Send an unauthenticated visitor to /me's sign-in flow, remembering the page
+    they were trying to reach (via ?next=) so it can send them back here — rather
+    than the old blanket redirect to "/", which lost the destination entirely and
+    always dropped a freshly-signed-in visitor on the dashboard instead."""
+    return RedirectResponse(f"/me?next={quote(next_path, safe='')}", status_code=303)
 
 
 async def _season_progress(db: AsyncSession, student: Student) -> dict:
@@ -147,14 +156,18 @@ async def root():
 
 
 @router.get("/me", response_class=HTMLResponse)
-async def index(request: Request, db: AsyncSession = Depends(get_db)):
+async def index(request: Request, db: AsyncSession = Depends(get_db), next: str = ""):
     student = await _current_student(request, db)
     if not student:
         # Signed in via Legion but doesn't qualify for the student portal — say why,
         # rather than silently re-showing the same "Sign in with Legion" button (which
         # looks like the sign-in itself failed when it actually succeeded).
         identity = sso_identity(request)
-        context = {"request": request, "authorize_url": make_authorize_url(request)}
+        # A protected route's guard (_signin_redirect) bounces here with ?next= set to
+        # the page it was trying to reach; without it, fall back to make_authorize_url's
+        # own default (the current /me request itself).
+        return_to = safe_next(next) if next else None
+        context = {"request": request, "authorize_url": make_authorize_url(request, return_to=return_to)}
         if identity is not None:
             if identity.get("role") != "student":
                 context["wrong_role"] = True
@@ -243,7 +256,7 @@ async def logout(request: Request):
 async def opportunities_list(request: Request, db: AsyncSession = Depends(get_db)):
     student = await _current_student(request, db)
     if not student:
-        return RedirectResponse("/", status_code=303)
+        return _signin_redirect(request.url.path)
 
     opps = (
         await db.execute(
@@ -282,7 +295,7 @@ async def opportunity_detail(
 ):
     student = await _current_student(request, db)
     if not student:
-        return RedirectResponse("/", status_code=303)
+        return _signin_redirect(request.url.path)
 
     opp = (
         await db.execute(
@@ -350,7 +363,7 @@ async def log_continuous_hours(
 ):
     student = await _current_student(request, db)
     if not student:
-        return RedirectResponse("/", status_code=303)
+        return _signin_redirect(f"/opportunities/{opp_id}")
 
     opp = (await db.execute(select(Opportunity).where(Opportunity.id == opp_id))).scalars().first()
     if not opp or not opp.is_continuous or not opp.is_active:
@@ -377,7 +390,7 @@ async def shift_signup(
 ):
     student = await _current_student(request, db)
     if not student:
-        return RedirectResponse("/", status_code=303)
+        return _signin_redirect("/opportunities")
 
     shift = (
         await db.execute(select(Shift).where(Shift.id == shift_id))
@@ -398,7 +411,7 @@ async def signup_cancel(
 ):
     student = await _current_student(request, db)
     if not student:
-        return RedirectResponse("/", status_code=303)
+        return _signin_redirect("/opportunities")
 
     signup = (
         await db.execute(select(Signup).where(Signup.id == signup_id))
@@ -420,7 +433,7 @@ async def signup_cancel(
 async def submit_get(request: Request, db: AsyncSession = Depends(get_db)):
     student = await _current_student(request, db)
     if not student:
-        return RedirectResponse("/", status_code=303)
+        return _signin_redirect(request.url.path)
 
     # Outstanding shifts: signed up, the shift is fully over (both started AND ended —
     # guards against shifts with a bad end-before-start time), and not yet logged (no
@@ -485,7 +498,7 @@ async def submit_shift(
 ):
     student = await _current_student(request, db)
     if not student:
-        return RedirectResponse("/", status_code=303)
+        return _signin_redirect("/submit")
 
     signup = (
         await db.execute(
@@ -531,7 +544,7 @@ async def submit_shift(
 async def my_hours(request: Request, db: AsyncSession = Depends(get_db)):
     student = await _current_student(request, db)
     if not student:
-        return RedirectResponse("/", status_code=303)
+        return _signin_redirect(request.url.path)
 
     progress = await _season_progress(db, student)
 
