@@ -158,18 +158,21 @@ Slack modals/buttons require the app's **Interactivity Request URL** = `/slack/i
 inline (not in a background task).
 
 ### New-opportunity announcements
-When the **first shift** is added to an opportunity (`admin_shift_create`), munus posts an
-announcement to `SLACK_ANNOUNCE_CHANNEL` (blank = off; the bot must be in that channel).
-Opportunities are created empty, so the first-shift moment is when there's finally something
-to sign up for. The message (`opportunities.announce_opportunity`) carries a **🙋 View & sign
-up** button (`action_id="opp_dashboard"`, value = opportunity id).
+Munus posts an announcement to `SLACK_ANNOUNCE_CHANNEL` (blank = off; the bot must be
+in that channel) at the moment there's finally something to act on: the **first shift**
+added to a shift-based opportunity (`admin_shift_create`), or immediately on creation
+for a **continuous** one (`admin_opportunities_create` — it has no shifts to wait for).
+The message (`opportunities.opportunity_announcement_blocks`) carries a **🙋 View & sign
+up** button — a plain Slack *link* button (a `url`, no `action_id`), straight to
+`{BASE_URL}/opportunities/{id}`.
 
-A single channel message can't hold a per-person sign-in link (a static link would sign
-everyone in as whoever it was built for). The **button** solves this: on click,
-`/slack/interact` reads the clicker's Slack id, looks up their `Student`, and replies
-**ephemerally** with an `/enter?member=<their code>&next=/opportunities/{id}` link — so
-each person gets their own one-tap sign-in, deep-linked to the opportunity. Unlinked
-users get an ephemeral "ask an admin" note. Same mechanism as `/vhours`.
+Being a link button, it never touches our server — Slack opens the URL directly, a
+genuine one-tap click for anyone with a live Legion session. The tradeoff: a shared
+channel message can't carry a personalized link per-clicker, so someone *without* a
+live session just hits Munus's normal sign-in wall (types their Legion username)
+instead of the one-tap Slack-push bootstrap `/enter` gives `/vhours`. Chosen
+deliberately over the alternative (an interactive button + an ephemeral reply with a
+personalized `/enter` link) to avoid the extra message just to open the page.
 
 ### Database migrations
 No Alembic. Add a `def _migration(conn)` guarded by `inspect(conn)` in `database.py` and

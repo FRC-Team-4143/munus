@@ -90,9 +90,13 @@ async def cancel_signup(db: AsyncSession, signup: Signup) -> None:
 def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     """Build the (fallback text, blocks) for a new-opportunity channel announcement.
 
-    The button (action_id `opp_dashboard`) carries the opportunity id; when a user clicks it,
-    `/slack/interact` looks them up by Slack id and privately replies with a personal sign-in
-    link — so a single shared button gives each person their own one-tap link."""
+    The button is a plain Slack *link* button (a `url`, no `action_id`) straight to the
+    opportunity page — it never touches our server, so it's a real one-tap click for
+    anyone with a live Legion session. There's no way to personalize a shared channel
+    message's button per-clicker, so someone without a live session just hits Munus's
+    normal sign-in wall (types their username) instead of the one-tap Slack-push
+    bootstrap `/enter` gives you — a deliberate trade for not needing a second,
+    ephemeral reply message just to open the page."""
     lines = [f"✨ *New volunteer opportunity: {opp.name}*"]
     if opp.description:
         lines.append(opp.description)
@@ -109,8 +113,7 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
                 {
                     "type": "button",
                     "text": {"type": "plain_text", "text": "🙋 View & sign up", "emoji": True},
-                    "action_id": "opp_dashboard",
-                    "value": str(opp.id),
+                    "url": f"{settings.base_url}/opportunities/{opp.id}",
                 }
             ],
         },

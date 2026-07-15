@@ -1,7 +1,27 @@
-from app.models import SignupStatus
+from app.config import settings
+from app.models import Opportunity, SignupStatus
 from app.services.opportunities import (
-    active_signup_count, cancel_signup, get_signup, remaining_capacity, signup_student,
+    active_signup_count, cancel_signup, get_signup, opportunity_announcement_blocks,
+    remaining_capacity, signup_student,
 )
+
+
+def test_announcement_button_is_a_direct_link_not_an_action():
+    """The button must be a plain Slack link button (a `url`, no `action_id`) so it
+    never round-trips through our server — see opportunity_announcement_blocks's
+    docstring for why this trades away per-clicker personalization."""
+    original = settings.base_url
+    try:
+        settings.base_url = "https://munus.example.org"
+        opp = Opportunity(id=42, name="Food Drive")
+        text, blocks = opportunity_announcement_blocks(opp)
+
+        assert "Food Drive" in text
+        button = blocks[-1]["elements"][0]
+        assert button["url"] == "https://munus.example.org/opportunities/42"
+        assert "action_id" not in button
+    finally:
+        settings.base_url = original
 
 
 async def test_signup_and_capacity(db, make_student, make_mentor, make_opportunity, make_shift):
