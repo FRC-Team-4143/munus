@@ -24,7 +24,7 @@ from app.models import (
     Signup, SignupStatus, Student, StudentLevel, SubmissionStatus, level_label,
 )
 from app.services import audit, submissions as submission_service
-from app.services.app_settings import get_season_start, set_season_start
+from app.services.app_settings import get_season_start, season_start_utc, set_season_start
 from app.services.opportunities import active_signup_count, announce_opportunity
 from app.services.reports import student_progress_report, student_vhours_message
 from app.services.requirements import level_requirements_map, resolve_required_hours, season_total_hours
@@ -178,6 +178,14 @@ async def admin_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
         select(func.count()).select_from(Opportunity).where(Opportunity.is_active.is_(True))
     ) or 0
 
+    total_hours_q = select(func.coalesce(func.sum(HourSubmission.hours), 0.0)).where(
+        HourSubmission.status == SubmissionStatus.approved
+    )
+    since = await season_start_utc(db)
+    if since is not None:
+        total_hours_q = total_hours_q.where(HourSubmission.submitted_at >= since)
+    total_hours = float(await db.scalar(total_hours_q) or 0.0)
+
     return templates.TemplateResponse(
         "admin/dashboard.html",
         {
@@ -185,6 +193,7 @@ async def admin_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
             "pending": pending,
             "active_students": active_students,
             "active_opps": active_opps,
+            "total_hours": total_hours,
         },
     )
 
@@ -196,17 +205,12 @@ async def admin_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
 # manual "Sync now" trigger for the hourly job (services/scheduler.py).
 
 @router.get("/roster", response_class=HTMLResponse)
-async def admin_roster(
-    request: Request, show_archived: int = 0, db: AsyncSession = Depends(get_db)
-):
+async def admin_roster(request: Request, db: AsyncSession = Depends(get_db)):
     if redirect := _require_auth(request):
         return redirect
 
     student_q = select(Student).order_by(Student.name)
     mentor_q = select(Mentor).order_by(Mentor.name)
-    if not show_archived:
-        student_q = student_q.where(Student.is_active.is_(True))
-        mentor_q = mentor_q.where(Mentor.is_active.is_(True))
 
     from app.services.app_settings import LEGION_LAST_SYNCED_KEY, get_setting
     last_synced = await get_setting(db, LEGION_LAST_SYNCED_KEY)
@@ -217,7 +221,6 @@ async def admin_roster(
             "request": request,
             "students": (await db.execute(student_q)).scalars().all(),
             "mentors": (await db.execute(mentor_q)).scalars().all(),
-            "show_archived": bool(show_archived),
             "last_synced": last_synced,
             "synced": request.query_params.get("synced"),
             "sync_error": request.query_params.get("sync_error"),

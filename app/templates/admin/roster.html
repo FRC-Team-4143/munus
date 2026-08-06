@@ -6,11 +6,6 @@
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
   <h2 class="mb-0">Roster</h2>
   <div class="d-flex gap-2 flex-wrap">
-    {% if show_archived %}
-    <a href="/admin/roster" class="btn btn-outline-secondary btn-sm"><i class="bi bi-eye-slash me-1"></i> Hide Archived</a>
-    {% else %}
-    <a href="/admin/roster?show_archived=1" class="btn btn-outline-secondary btn-sm"><i class="bi bi-archive me-1"></i> Show Archived</a>
-    {% endif %}
     {% if legion_base_url() %}
     <a class="btn btn-outline-light btn-sm" href="{{ legion_base_url() }}/admin" target="_blank">
       <i class="bi bi-box-arrow-up-right me-1"></i> Manage in Legion
