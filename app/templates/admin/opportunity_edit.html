@@ -95,7 +95,12 @@
             <tr>
               <td>{{ s.start_time | shiftrange(s.end_time) }}{% if s.notes %}<div class="text-muted small">{{ s.notes }}</div>{% endif %}</td>
               <td>{{ s.capacity if s.capacity else '∞' }}</td>
-              <td>{{ counts[s.id] }}</td>
+              <td>
+                <button class="btn btn-sm btn-link p-0 text-decoration-none" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#roster{{ s.id }}">
+                  {{ counts[s.id] }} <i class="bi bi-caret-down-fill small"></i>
+                </button>
+              </td>
               <td>
                 <form method="post" action="/admin/shifts/{{ s.id }}/reviewer" class="d-flex gap-1">
                   <select name="reviewer_mentor_id" class="form-select form-select-sm" style="min-width: 9rem;" onchange="this.form.submit()">
@@ -117,6 +122,29 @@
                 <form method="post" action="/admin/shifts/{{ s.id }}/delete" class="d-inline" onsubmit="return confirm('Delete this shift and its signups?')">
                   <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
                 </form>
+              </td>
+            </tr>
+            <tr>
+              <td colspan="5" class="p-0 border-0">
+                <div class="collapse" id="roster{{ s.id }}">
+                  <div class="px-3 py-2" style="background: #1a0f0f;">
+                    {% if rosters[s.id] %}
+                    <ul class="list-unstyled mb-0 small">
+                      {% for su in rosters[s.id] %}
+                      <li class="d-flex justify-content-between align-items-center py-1">
+                        <span>{{ su.student.name if su.student else 'Unknown student' }}</span>
+                        <form method="post" action="/admin/shifts/{{ s.id }}/signups/{{ su.id }}/remove" class="d-inline"
+                              onsubmit="return confirm('Remove this student from the shift? They will be notified.')">
+                          <button class="btn btn-sm btn-outline-danger py-0 px-2">Remove</button>
+                        </form>
+                      </li>
+                      {% endfor %}
+                    </ul>
+                    {% else %}
+                    <span class="text-muted small">No one signed up yet.</span>
+                    {% endif %}
+                  </div>
+                </div>
               </td>
             </tr>
             {% endfor %}

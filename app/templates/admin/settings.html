@@ -73,6 +73,15 @@
         <div class="form-text">Close out a never-logged shift this many days after it ends. 0 = off.</div>
       </div>
 
+      <div class="mb-3 row align-items-center">
+        <label class="col-sm-7 col-form-label">Auto-archive opportunity after</label>
+        <div class="col-sm-5 input-group">
+          <input type="number" min="0" step="1" name="auto_archive_days" class="form-control" value="{{ auto_archive_days }}" required>
+          <span class="input-group-text">days</span>
+        </div>
+        <div class="form-text">Archive a shift-based opportunity this many days after its last shift ends. Logged hours aren't affected. Continuous opportunities are never auto-archived. 0 = off.</div>
+      </div>
+
       <div class="mb-3">
         <label class="form-label">Weekly backup day</label>
         <select name="backup_day" class="form-select">

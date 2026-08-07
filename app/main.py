@@ -7,12 +7,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, init_db
 from app.routers import portal, admin, slack
-from app.services.scheduler import create_scheduler
+from app.services.scheduler import create_scheduler, job_auto_archive_opportunities
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # Catch-up run: IntervalTrigger's first fire is a full interval after startup, so
+    # without this, opportunities that were already stale before a deploy wouldn't be
+    # swept for up to 6h. Cheap and idempotent — only currently-active opportunities are
+    # considered — so running it again on every restart is harmless.
+    await job_auto_archive_opportunities()
     scheduler = create_scheduler()
     scheduler.start()
     app.state.scheduler = scheduler

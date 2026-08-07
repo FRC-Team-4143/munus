@@ -219,6 +219,7 @@ def test_manager_allowed_excludes_purge():
     assert _manager_allowed("/admin/opportunities/5/edit") is True
     assert _manager_allowed("/admin/opportunities/5/archive") is True
     assert _manager_allowed("/admin/shifts/3/edit") is True
+    assert _manager_allowed("/admin/shifts/3/signups/7/remove") is True
     # Purge is excluded, with or without a trailing slash.
     assert _manager_allowed("/admin/opportunities/5/purge") is False
     assert _manager_allowed("/admin/opportunities/5/purge/") is False
@@ -511,6 +512,93 @@ async def test_opportunity_edit_page_shows_edit_shift_modal(client, db, make_opp
     assert resp.status_code == 200
     assert f'id="editShift{shift.id}"' in resp.text
     assert f'value="{shift.capacity}"' in resp.text
+
+
+async def test_opportunity_edit_page_shows_shift_roster(
+    client, db, make_student, make_opportunity, make_shift
+):
+    """The per-shift roster toggle lists the signed-up students by name, and a
+    cancelled signup doesn't appear."""
+    from app.models import Signup, SignupStatus
+
+    await _login(client)
+    student = await make_student(name="Ada Lovelace", code="ada00001")
+    cancelled = await make_student(name="Grace Hopper", code="gra00001")
+    opp = await make_opportunity()
+    shift = await make_shift(opp.id)
+    db.add(Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.signed_up))
+    db.add(Signup(shift_id=shift.id, student_id=cancelled.id, status=SignupStatus.cancelled))
+    await db.commit()
+
+    resp = await client.get(f"/admin/opportunities/{opp.id}/edit")
+    assert resp.status_code == 200
+    assert f'id="roster{shift.id}"' in resp.text
+    assert "Ada Lovelace" in resp.text
+    assert "Grace Hopper" not in resp.text
+
+
+async def test_admin_remove_signup_cancels_and_notifies_student(
+    client, db, monkeypatch, make_student, make_opportunity, make_shift
+):
+    import app.routers.admin as adminmod
+    from app.models import Signup, SignupStatus
+
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None):
+        calls.append((uid, text))
+        return "ts"
+
+    monkeypatch.setattr(adminmod, "send_dm", fake_send_dm)
+
+    await _login(client)
+    student = await make_student(name="Ada Lovelace", slack="U0STU")
+    opp = await make_opportunity(name="Food Drive")
+    shift = await make_shift(opp.id)
+    signup = Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.signed_up)
+    db.add(signup)
+    await db.commit()
+    await db.refresh(signup)
+
+    resp = await client.post(
+        f"/admin/shifts/{shift.id}/signups/{signup.id}/remove", follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == f"/admin/opportunities/{opp.id}/edit"
+
+    await db.refresh(signup)
+    assert signup.status == SignupStatus.cancelled
+    assert len(calls) == 1
+    assert calls[0][0] == "U0STU"
+    assert "Food Drive" in calls[0][1]
+
+    # Removing an already-cancelled signup is a no-op — no duplicate DM.
+    resp = await client.post(f"/admin/shifts/{shift.id}/signups/{signup.id}/remove")
+    assert len(calls) == 1
+
+
+async def test_admin_remove_signup_skips_dm_without_slack_id(
+    client, db, monkeypatch, make_student, make_opportunity, make_shift
+):
+    import app.routers.admin as adminmod
+    from app.models import Signup, SignupStatus
+
+    calls = []
+    monkeypatch.setattr(adminmod, "send_dm", lambda *a, **k: calls.append(a))
+
+    await _login(client)
+    student = await make_student(name="No Slack", slack=None)
+    opp = await make_opportunity()
+    shift = await make_shift(opp.id)
+    signup = Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.signed_up)
+    db.add(signup)
+    await db.commit()
+    await db.refresh(signup)
+
+    await client.post(f"/admin/shifts/{shift.id}/signups/{signup.id}/remove")
+    await db.refresh(signup)
+    assert signup.status == SignupStatus.cancelled
+    assert calls == []  # no Slack ID -> no DM attempted
 
 
 async def test_roster_sync_now_button(client, monkeypatch):
