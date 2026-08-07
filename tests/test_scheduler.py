@@ -1,7 +1,7 @@
 from sqlalchemy import select
 
 import app.services.scheduler as scheduler
-from app.models import Signup, SignupStatus
+from app.models import HourSubmission, Opportunity, Signup, SignupStatus, SubmissionStatus
 
 
 async def test_post_shift_prompt_sends_interactive_dm(
@@ -134,3 +134,63 @@ async def test_auto_reject_skips_submitted_and_respects_disable(
         await db.execute(select(HourSubmission).where(HourSubmission.student_id == other.id))
     ).scalars().all()
     assert other_subs == []
+
+
+async def test_auto_archive_opportunity_after_last_shift(
+    db, session_factory, make_opportunity, make_shift, monkeypatch
+):
+    monkeypatch.setattr(scheduler, "AsyncSessionLocal", session_factory)
+
+    stale = await make_opportunity(name="Past Bake Sale")
+    await make_shift(stale.id, start_in_hours=-72, length_hours=2)  # ended ~2 days ago
+
+    recent = await make_opportunity(name="Recent Cleanup")
+    await make_shift(recent.id, start_in_hours=-6, length_hours=2)  # ended a few hours ago
+
+    ongoing = await make_opportunity(name="CAD Subteam", is_continuous=True)
+
+    await scheduler.job_auto_archive_opportunities()
+
+    await db.refresh(stale)
+    await db.refresh(recent)
+    await db.refresh(ongoing)
+    assert stale.is_active is False
+    assert stale.archived_at is not None
+    assert recent.is_active is True  # inside the 1-day grace window
+    assert ongoing.is_active is True  # continuous opps are never auto-archived
+
+    # Idempotent: a second run doesn't touch the already-archived one again.
+    prev_archived_at = stale.archived_at
+    await scheduler.job_auto_archive_opportunities()
+    await db.refresh(stale)
+    assert stale.archived_at == prev_archived_at
+
+
+async def test_auto_archive_respects_disable_and_hours_persist(
+    db, session_factory, make_student, make_opportunity, make_shift, monkeypatch
+):
+    monkeypatch.setattr(scheduler, "AsyncSessionLocal", session_factory)
+
+    student = await make_student(code="ada00001")
+    opp = await make_opportunity(name="Past Bake Sale")
+    shift = await make_shift(opp.id, start_in_hours=-72, length_hours=2)
+    db.add(HourSubmission(
+        student_id=student.id, opportunity_id=opp.id, shift_id=shift.id,
+        hours=2.0, status=SubmissionStatus.approved,
+    ))
+    await db.commit()
+
+    monkeypatch.setattr(scheduler.settings, "auto_archive_days", 0)
+    await scheduler.job_auto_archive_opportunities()
+    await db.refresh(opp)
+    assert opp.is_active is True  # disabled → no-op
+
+    monkeypatch.setattr(scheduler.settings, "auto_archive_days", 1)
+    await scheduler.job_auto_archive_opportunities()
+    await db.refresh(opp)
+    assert opp.is_active is False
+
+    # Archiving never deletes the logged hours.
+    subs = (await db.execute(select(HourSubmission).where(HourSubmission.opportunity_id == opp.id))).scalars().all()
+    assert len(subs) == 1
+    assert subs[0].status == SubmissionStatus.approved

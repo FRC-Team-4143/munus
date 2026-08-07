@@ -42,6 +42,27 @@ async def test_identify_and_browse(client, make_student, make_mentor, make_oppor
     assert "Season total" in my_hours.text
 
 
+async def test_opportunity_without_upcoming_shifts_hidden_from_listing(
+    client, make_student, make_opportunity, make_shift
+):
+    """An opportunity whose only shift is fully in the past shouldn't clutter the
+    listing with a "0 upcoming shifts" card — nothing left to sign up for."""
+    await make_student(code="ada00001")
+    past_opp = await make_opportunity(name="Past Bake Sale")
+    await make_shift(past_opp.id, start_in_hours=-48, length_hours=2)  # long over
+    future_opp = await make_opportunity(name="Food Drive")
+    await make_shift(future_opp.id, start_in_hours=24, length_hours=2)
+    no_shifts_opp = await make_opportunity(name="Not Scheduled Yet")
+
+    await _identify(client, "ada00001")
+
+    listing = await client.get("/opportunities")
+    assert listing.status_code == 200
+    assert "Food Drive" in listing.text
+    assert "Past Bake Sale" not in listing.text
+    assert "Not Scheduled Yet" not in listing.text
+
+
 async def test_continuous_opportunity_shows_log_hours_form(client, make_student, make_opportunity):
     await make_student(code="ada00001")
     opp = await make_opportunity(name="CAD Subteam", is_continuous=True)

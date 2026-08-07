@@ -2,6 +2,8 @@
 APScheduler jobs:
   1. Pre-shift reminders — DM signed-up students before their shift starts.
   2. Post-shift prompts — DM signed-up students after a shift ends to submit a report.
+  3. Auto-archive opportunities — retire a shift-based opportunity once its last shift
+     is old enough that nothing is left to sign up for.
 """
 import logging
 from datetime import datetime, timedelta
@@ -15,9 +17,9 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models import (
-    HourSubmission, Shift, Signup, SignupStatus, SubmissionStatus,
+    HourSubmission, Opportunity, Shift, Signup, SignupStatus, SubmissionStatus,
 )
-from app.services import submissions
+from app.services import audit, submissions
 from app.services.slack_client import send_dm
 from app.utils import format_shift_range, shift_length_hours
 
@@ -193,6 +195,49 @@ async def job_auto_reject_unlogged() -> None:
     log.info("Auto-reject: closed %d unlogged shift(s)", rejected)
 
 
+async def job_auto_archive_opportunities() -> None:
+    """Archive a shift-based opportunity once its last shift ended more than
+    AUTO_ARCHIVE_DAYS ago. Archiving only flips is_active/archived_at — it never touches
+    HourSubmission rows, so hours already logged against it keep counting toward
+    students' season totals (only the separate /purge action deletes those). Continuous
+    opportunities have no shifts and are never auto-archived — close those manually.
+    Disabled when AUTO_ARCHIVE_DAYS <= 0. Idempotent: only currently-active opportunities
+    are considered, so an already-archived one is never touched twice."""
+    if not settings.updates_enabled:
+        log.info("Auto-archive opportunities skipped (updates_enabled=false)")
+        return
+    days = settings.auto_archive_days
+    if days <= 0:
+        return
+    now = datetime.utcnow()
+    cutoff = now - timedelta(days=days)
+    async with AsyncSessionLocal() as db:
+        opps = (
+            await db.execute(
+                select(Opportunity)
+                .options(selectinload(Opportunity.shifts))
+                .where(Opportunity.is_active.is_(True), Opportunity.is_continuous.is_(False))
+            )
+        ).scalars().all()
+
+        archived = 0
+        for opp in opps:
+            if not opp.shifts:
+                continue  # never had a shift yet — nothing to measure "last shift" from
+            last_end = max(s.end_time for s in opp.shifts)
+            if last_end <= cutoff:
+                opp.is_active = False
+                opp.archived_at = now
+                await audit.record(
+                    db, None, "opportunity.auto_archive",
+                    f"Auto-archived opportunity {opp.name} ({days}d after its last shift ended)",
+                    entity_type="opportunity", entity_id=opp.id,
+                )
+                archived += 1
+        await db.commit()
+    log.info("Auto-archive: archived %d opportunity(ies)", archived)
+
+
 async def job_nightly_backup() -> None:
     from app.services.backup import is_sqlite, nightly_backup
     if not is_sqlite():
@@ -245,6 +290,12 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         job_auto_reject_unlogged,
         IntervalTrigger(hours=6),
         id="auto_reject_unlogged",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_auto_archive_opportunities,
+        IntervalTrigger(hours=6),
+        id="auto_archive_opportunities",
         replace_existing=True,
     )
 

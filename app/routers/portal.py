@@ -278,6 +278,8 @@ async def opportunities_list(request: Request, db: AsyncSession = Depends(get_db
         # join. "Over" = both start and end have passed, so a shift stays visible even if
         # it has a bad end-before-start time.
         upcoming_shifts = [s for s in opp.shifts if s.start_time > now or s.end_time > now]
+        if not upcoming_shifts:
+            continue  # nothing left to sign up for — auto-archive will retire it soon
         cards.append({
             "opp": opp,
             "upcoming": len(upcoming_shifts),

@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # (records a rejected submission so it stops counting toward projected hours). 0 = off.
     auto_reject_days: int = 7
 
+    # Auto-archive a shift-based opportunity this many days after its last shift ends
+    # (archiving only flips is_active — logged hours are untouched, only /purge deletes
+    # those). Continuous opportunities have no shifts and are never auto-archived; close
+    # those manually. 0 = off.
+    auto_archive_days: int = 1
+
     # Database backups (SQLite only)
     backup_dir: str = "backups"
     backup_keep: int = 14  # number of snapshots to retain
