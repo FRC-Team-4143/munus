@@ -922,6 +922,7 @@ async def admin_settings_get(request: Request, db: AsyncSession = Depends(get_db
             "timezone": settings.timezone,
             "reminder_lead_hours": settings.reminder_lead_hours,
             "auto_reject_days": settings.auto_reject_days,
+            "auto_archive_days": settings.auto_archive_days,
             "backup_day": settings.backup_day,
             "backup_time": settings.backup_time,
             "backup_keep": settings.backup_keep,
@@ -941,6 +942,7 @@ async def admin_settings_post(
     timezone: str = Form(...),
     reminder_lead_hours: int = Form(...),
     auto_reject_days: int = Form(...),
+    auto_archive_days: int = Form(...),
     backup_day: str = Form(...),
     backup_time: str = Form(...),
     backup_keep: int = Form(...),
@@ -1008,6 +1010,12 @@ async def admin_settings_post(
         env_updates["AUTO_REJECT_DAYS"] = str(auto_reject_days)
         settings.auto_reject_days = auto_reject_days
 
+    if auto_archive_days < 0:
+        errors.append("Auto-archive days cannot be negative.")
+    elif auto_archive_days != settings.auto_archive_days:
+        env_updates["AUTO_ARCHIVE_DAYS"] = str(auto_archive_days)
+        settings.auto_archive_days = auto_archive_days
+
     channel = slack_announce_channel.strip()
     if channel != settings.slack_announce_channel:
         env_updates["SLACK_ANNOUNCE_CHANNEL"] = channel
@@ -1027,7 +1035,7 @@ async def admin_settings_post(
         f"Updated settings (season_start={parsed or 'all-time'}; timezone={settings.timezone}; "
         f"backup={settings.backup_day} {settings.backup_time} keep={settings.backup_keep}; "
         f"reminder_lead_hours={settings.reminder_lead_hours}; auto_reject_days={settings.auto_reject_days}; "
-        f"updates_enabled={settings.updates_enabled})",
+        f"auto_archive_days={settings.auto_archive_days}; updates_enabled={settings.updates_enabled})",
         entity_type="settings",
     )
     await db.commit()
