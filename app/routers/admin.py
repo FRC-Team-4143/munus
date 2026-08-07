@@ -25,7 +25,7 @@ from app.models import (
 )
 from app.services import audit, submissions as submission_service
 from app.services.app_settings import get_season_start, season_start_utc, set_season_start
-from app.services.opportunities import active_signup_count, announce_opportunity
+from app.services.opportunities import announce_opportunity
 from app.services.reports import student_progress_report, student_vhours_message
 from app.services.requirements import level_requirements_map, resolve_required_hours, season_total_hours
 from app.services.slack_client import send_dm
@@ -311,12 +311,26 @@ async def admin_opportunities_edit_get(opp_id: int, request: Request, db: AsyncS
     if not opp:
         return RedirectResponse("/admin/opportunities", status_code=303)
     shifts = sorted(opp.shifts, key=lambda s: s.start_time)
-    counts = {s.id: await active_signup_count(db, s.id) for s in shifts}
+    shift_ids = [s.id for s in shifts]
+    rosters: dict[int, list[Signup]] = {sid: [] for sid in shift_ids}
+    if shift_ids:
+        signups = (
+            await db.execute(
+                select(Signup)
+                .options(selectinload(Signup.student))
+                .where(Signup.shift_id.in_(shift_ids), Signup.status == SignupStatus.signed_up)
+                .order_by(Signup.created_at)
+            )
+        ).scalars().all()
+        for su in signups:
+            rosters[su.shift_id].append(su)
+    counts = {sid: len(rosters[sid]) for sid in shift_ids}
     all_mentors = (await db.execute(select(Mentor).order_by(Mentor.name))).scalars().all()
     return templates.TemplateResponse(
         "admin/opportunity_edit.html",
         {
             "request": request, "opp": opp, "shifts": shifts, "counts": counts,
+            "rosters": rosters,
             "mentors": [m for m in all_mentors if m.is_active],
             "mentor_names": {m.id: m.name for m in all_mentors},
         },
@@ -603,6 +617,52 @@ async def admin_shift_delete(shift_id: int, request: Request, db: AsyncSession =
         await db.commit()
         return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
     return RedirectResponse("/admin/opportunities", status_code=303)
+
+
+@router.post("/shifts/{shift_id}/signups/{signup_id}/remove")
+async def admin_signup_remove(
+    shift_id: int, signup_id: int, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Cancel a student's signup on the admin's/manager's behalf (e.g. a no-show or a
+    mistaken signup) and DM them a heads-up. Mirrors the student's own
+    /signups/{id}/cancel in routers/portal.py, just admin-triggered."""
+    if redirect := _require_auth(request):
+        return redirect
+
+    signup = (
+        await db.execute(
+            select(Signup)
+            .options(
+                selectinload(Signup.student),
+                selectinload(Signup.shift).selectinload(Shift.opportunity),
+            )
+            .where(Signup.id == signup_id, Signup.shift_id == shift_id)
+        )
+    ).scalars().first()
+    if not signup:
+        return RedirectResponse("/admin/opportunities", status_code=303)
+
+    shift = signup.shift
+    opp_id = shift.opportunity_id
+    if signup.status == SignupStatus.signed_up:
+        signup.status = SignupStatus.cancelled
+        student = signup.student
+        if student and student.slack_user_id:
+            opp_name = shift.opportunity.name if shift.opportunity else "a volunteer shift"
+            await send_dm(
+                student.slack_user_id,
+                f"📋 You've been removed from *{opp_name}*\n"
+                f"{format_shift_range(shift.start_time, shift.end_time)}\n"
+                f"Reach out to a mentor if you think this is a mistake.",
+            )
+        await audit.record(
+            db, request, "signup.remove",
+            f"Removed {student.name if student else 'a student'} from a shift of "
+            f"{shift.opportunity.name if shift.opportunity else 'an opportunity'}",
+            entity_type="signup", entity_id=signup_id,
+        )
+        await db.commit()
+    return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
 
 
 # ── Submissions ────────────────────────────────────────────────────────────────
