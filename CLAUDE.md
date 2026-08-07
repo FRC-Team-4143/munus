@@ -197,6 +197,7 @@ add Bootstrap default light classes.
 | Pre-shift reminders | every 30 min (DMs shifts within `REMINDER_LEAD_HOURS`) |
 | Post-shift submit prompts | every 30 min (DMs after a shift ends, once) |
 | Auto-reject unlogged shifts | every 6 h (records a rejected submission `AUTO_REJECT_DAYS` after a shift ends if the student never logged it; `0` = off) |
+| Auto-archive stale opportunities | every 6 h, plus once at startup (archives a shift-based opportunity `AUTO_ARCHIVE_DAYS` after its last shift ends; `0` = off; never touches continuous opportunities or logged hours — only `is_active`/`archived_at`) |
 | Database backup | `BACKUP_DAY` at `BACKUP_TIME` (SQLite snapshot, rotates to `BACKUP_KEEP`) |
 | Legion roster sync | hourly, on the hour (cheap incremental pull via `updated_since`) |
 
