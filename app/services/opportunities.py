@@ -10,8 +10,8 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models import Opportunity, Shift, Signup, SignupStatus
-from app.services.slack_client import post_to_channel
-from app.utils import now_utc
+from app.services.slack_client import post_to_channel, update_channel_message
+from app.utils import format_date_range, now_utc
 
 
 async def upcoming_signups_for_student(db: AsyncSession, student_id: int) -> list[Signup]:
@@ -90,6 +90,12 @@ async def cancel_signup(db: AsyncSession, signup: Signup) -> None:
 def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     """Build the (fallback text, blocks) for a new-opportunity channel announcement.
 
+    `opp.shifts` must already be loaded (e.g. `selectinload(Opportunity.shifts)`) —
+    this is a sync function and can't lazy-load across an async session. The date line
+    it builds from those shifts is why every shift create/edit/delete route also calls
+    `update_announcement` afterward (see routers/admin.py): the span can shift as shifts
+    are added, rescheduled, or removed, and the already-posted message needs to track it.
+
     The button is a plain Slack *link* button (a `url`, no `action_id`) straight to the
     opportunity page — it never touches our server, so it's a real one-tap click for
     anyone with a live Legion session. There's no way to personalize a shared channel
@@ -104,6 +110,9 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
         lines.append(opp.description)
     if opp.location:
         lines.append(f"📍 {opp.location}")
+    date_range = format_date_range(opp.shifts)
+    if date_range:
+        lines.append(f"📅 {date_range}")
     if opp.attire:
         lines.append(f"👕 {opp.attire}")
     text = "\n".join(lines)
@@ -123,10 +132,31 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     return text, blocks
 
 
-async def announce_opportunity(opp: Opportunity) -> Optional[str]:
-    """Post a new-opportunity announcement to the configured Slack channel. No-op when
-    SLACK_ANNOUNCE_CHANNEL is blank. Returns the message ts or None."""
+async def announce_opportunity(db: AsyncSession, opp: Opportunity) -> Optional[str]:
+    """Post a new-opportunity announcement to the configured Slack channel, and
+    remember where (channel + ts) so a later edit can keep that message in sync via
+    `update_announcement`. No-op when SLACK_ANNOUNCE_CHANNEL is blank. Returns the
+    message ts or None."""
     if not settings.slack_announce_channel:
         return None
     text, blocks = opportunity_announcement_blocks(opp)
-    return await post_to_channel(settings.slack_announce_channel, text, blocks=blocks, automated=True)
+    ts = await post_to_channel(settings.slack_announce_channel, text, blocks=blocks, automated=True)
+    if ts:
+        opp.announcement_channel_id = settings.slack_announce_channel
+        opp.announcement_ts = ts
+        await db.commit()
+    return ts
+
+
+async def update_announcement(db: AsyncSession, opp: Opportunity) -> Optional[bool]:
+    """Re-render the opportunity's current details and push them to its already-posted
+    announcement message, if it has one — keeps an edit (name, description, location,
+    attire, required status) in sync with what's pinned in Slack. Returns None (no-op)
+    if the opportunity was never announced; otherwise True/False for the chat.update
+    call's success, mirroring `update_channel_message`."""
+    if not opp.announcement_channel_id or not opp.announcement_ts:
+        return None
+    text, blocks = opportunity_announcement_blocks(opp)
+    return await update_channel_message(
+        opp.announcement_channel_id, opp.announcement_ts, text, blocks=blocks
+    )

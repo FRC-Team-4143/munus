@@ -357,6 +357,7 @@ async def opportunity_detail(
         remaining = await opp_service.remaining_capacity(db, shift)
         shift_rows.append({
             "shift": shift,
+            "hours": shift_length_hours(shift.start_time, shift.end_time),
             "remaining": remaining,
             "is_full": remaining is not None and remaining <= 0,
             "signed_up": shift.id in my_signups,

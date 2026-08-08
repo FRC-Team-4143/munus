@@ -68,8 +68,9 @@
       <div class="card-header"><i class="bi bi-calendar-plus me-1"></i> Add Shift</div>
       <div class="card-body">
         <form method="post" action="/admin/opportunities/{{ opp.id }}/shifts" class="row g-2">
-          <div class="col-md-6"><label class="form-label small">Start</label><input type="datetime-local" name="start_time" class="form-control" required></div>
-          <div class="col-md-6"><label class="form-label small">End</label><input type="datetime-local" name="end_time" class="form-control" required></div>
+          <div class="col-md-4"><label class="form-label small">Date</label><input type="date" name="date" class="form-control" required></div>
+          <div class="col-md-4"><label class="form-label small">Start time</label><input type="time" name="start_time" class="form-control" required></div>
+          <div class="col-md-4"><label class="form-label small">End time</label><input type="time" name="end_time" class="form-control" required></div>
           <div class="col-md-4"><label class="form-label small">Capacity <span class="text-muted">(0 = ∞)</span></label><input type="number" name="capacity" class="form-control" value="0" min="0"></div>
           <div class="col-md-8"><label class="form-label small">Notes</label><input name="notes" class="form-control"></div>
           <div class="col-md-8">
@@ -160,13 +161,17 @@
       <form method="post" action="/admin/shifts/{{ s.id }}/edit">
         <div class="modal-header"><h5 class="modal-title">Edit Shift</h5></div>
         <div class="modal-body row g-2">
-          <div class="col-md-6">
-            <label class="form-label small">Start</label>
-            <input type="datetime-local" name="start_time" class="form-control" value="{{ s.start_time | localdt('%Y-%m-%dT%H:%M') }}" required>
+          <div class="col-md-4">
+            <label class="form-label small">Date</label>
+            <input type="date" name="date" class="form-control" value="{{ s.start_time | localdt('%Y-%m-%d') }}" required>
           </div>
-          <div class="col-md-6">
-            <label class="form-label small">End</label>
-            <input type="datetime-local" name="end_time" class="form-control" value="{{ s.end_time | localdt('%Y-%m-%dT%H:%M') }}" required>
+          <div class="col-md-4">
+            <label class="form-label small">Start time</label>
+            <input type="time" name="start_time" class="form-control" value="{{ s.start_time | localdt('%H:%M') }}" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">End time</label>
+            <input type="time" name="end_time" class="form-control" value="{{ s.end_time | localdt('%H:%M') }}" required>
           </div>
           <div class="col-md-4">
             <label class="form-label small">Capacity <span class="text-muted">(0 = ∞)</span></label>

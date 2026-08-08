@@ -174,6 +174,20 @@ instead of the one-tap Slack-push bootstrap `/enter` gives `/vhours`. Chosen
 deliberately over the alternative (an interactive button + an ephemeral reply with a
 personalized `/enter` link) to avoid the extra message just to open the page.
 
+`announce_opportunity` records where it posted (`Opportunity.announcement_channel_id`/
+`announcement_ts`). The blocks also carry a 📅 date line (`utils.format_date_range`
+over `opp.shifts`) for shift-based opportunities. Saving the opportunity editor form,
+or adding/editing/deleting any of its shifts, calls `opportunities.update_announcement`
+afterward, which re-renders the same blocks and pushes them to that message via
+`chat.update` — so a name/description/location/attire/required-status edit *and* a
+shift's date span stay in sync with what's pinned in Slack instead of going stale. (The
+FIRST shift on a shift-based opportunity is the exception — it triggers the initial
+`announce_opportunity` post instead, per the trigger rule above.) No-op if the
+opportunity was never announced (blank `SLACK_ANNOUNCE_CHANNEL` at the time, or no
+shift/continuous trigger has fired yet). `opportunity_announcement_blocks` needs
+`opp.shifts` eager-loaded (`selectinload`) before it's called — it's synchronous and
+can't lazy-load across an async session.
+
 ### Database migrations
 No Alembic. Add a `def _migration(conn)` guarded by `inspect(conn)` in `database.py` and
 call it from `init_db()`, mirroring Tempus. No production data predates the Legion

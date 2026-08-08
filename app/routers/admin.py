@@ -25,7 +25,7 @@ from app.models import (
 )
 from app.services import audit, submissions as submission_service
 from app.services.app_settings import get_season_start, season_start_utc, set_season_start
-from app.services.opportunities import announce_opportunity
+from app.services.opportunities import announce_opportunity, update_announcement
 from app.services.reports import student_progress_report, student_vhours_message
 from app.services.requirements import (
     level_requirements_map, resolve_required_hours, season_required_opportunities,
@@ -53,6 +53,14 @@ templates.env.filters["levellabel"] = level_label
 def _opt_id(raw: Optional[str]) -> Optional[int]:
     """Parse an optional integer form field (e.g. a mentor dropdown), '' -> None."""
     return int(raw) if raw and str(raw).strip() else None
+
+
+def _parse_shift_times(date: str, start_time: str, end_time: str) -> tuple[datetime, datetime]:
+    """Combine the shift form's single date + start/end time-of-day fields into
+    (start_utc, end_utc). Shifts never cross midnight, so one date covers both."""
+    start_dt = local_to_utc(datetime.fromisoformat(f"{date}T{start_time}"))
+    end_dt = local_to_utc(datetime.fromisoformat(f"{date}T{end_time}"))
+    return start_dt, end_dt
 
 
 async def _active_mentors(db: AsyncSession):
@@ -304,7 +312,7 @@ async def admin_opportunities_create(
     # A continuous opportunity has no shifts to wait for — announce it right away
     # (mirrors admin_shift_create's "first shift added" trigger for shift-based ones).
     if is_continuous and settings.slack_announce_channel:
-        await announce_opportunity(opp)
+        await announce_opportunity(db, opp)
     return RedirectResponse(f"/admin/opportunities/{opp.id}/edit", status_code=303)
 
 
@@ -362,7 +370,11 @@ async def admin_opportunities_edit_post(
 ):
     if redirect := _require_auth(request):
         return redirect
-    opp = (await db.execute(select(Opportunity).where(Opportunity.id == opp_id))).scalars().first()
+    opp = (
+        await db.execute(
+            select(Opportunity).options(selectinload(Opportunity.shifts)).where(Opportunity.id == opp_id)
+        )
+    ).scalars().first()
     if opp:
         opp.name = name.strip()
         opp.description = description.strip() if description else None
@@ -374,6 +386,9 @@ async def admin_opportunities_edit_post(
         opp.is_required = is_required and not is_continuous
         await audit.record(db, request, "opportunity.edit", f"Edited opportunity {opp.name}", entity_type="opportunity", entity_id=opp.id)
         await db.commit()
+        # Keep an already-posted announcement in sync with the edited details
+        # (no-op if this opportunity was never announced — see update_announcement).
+        await update_announcement(db, opp)
     return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
 
 
@@ -476,6 +491,7 @@ async def admin_opportunities_notify(opp_id: int, request: Request, db: AsyncSes
 async def admin_shift_create(
     opp_id: int,
     request: Request,
+    date: str = Form(...),
     start_time: str = Form(...),
     end_time: str = Form(...),
     capacity: int = Form(0),
@@ -486,8 +502,7 @@ async def admin_shift_create(
     if redirect := _require_auth(request):
         return redirect
 
-    start_dt = local_to_utc(datetime.fromisoformat(start_time))
-    end_dt = local_to_utc(datetime.fromisoformat(end_time))
+    start_dt, end_dt = _parse_shift_times(date, start_time, end_time)
     if end_dt <= start_dt:
         return RedirectResponse(
             f"/admin/opportunities/{opp_id}/edit?error=Shift+end+time+must+be+after+its+start+time.",
@@ -511,10 +526,19 @@ async def admin_shift_create(
     ))
     await audit.record(db, request, "shift.create", f"Added shift to opportunity {opp_id}", entity_type="shift")
     await db.commit()
-    if is_first_shift and settings.slack_announce_channel:
-        opp = (await db.execute(select(Opportunity).where(Opportunity.id == opp_id))).scalars().first()
-        if opp:
-            await announce_opportunity(opp)
+    # First shift: announce fresh. Any later shift: the date span the announcement
+    # already shows may have changed, so push the update to that same message instead
+    # (a no-op via update_announcement if it was never announced in the first place).
+    opp = (
+        await db.execute(
+            select(Opportunity).options(selectinload(Opportunity.shifts)).where(Opportunity.id == opp_id)
+        )
+    ).scalars().first()
+    if opp:
+        if is_first_shift and settings.slack_announce_channel:
+            await announce_opportunity(db, opp)
+        else:
+            await update_announcement(db, opp)
     return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
 
 
@@ -522,6 +546,7 @@ async def admin_shift_create(
 async def admin_shift_edit(
     shift_id: int,
     request: Request,
+    date: str = Form(...),
     start_time: str = Form(...),
     end_time: str = Form(...),
     capacity: int = Form(0),
@@ -534,8 +559,7 @@ async def admin_shift_edit(
     if not shift:
         return RedirectResponse("/admin/opportunities", status_code=303)
 
-    start_dt = local_to_utc(datetime.fromisoformat(start_time))
-    end_dt = local_to_utc(datetime.fromisoformat(end_time))
+    start_dt, end_dt = _parse_shift_times(date, start_time, end_time)
     if end_dt <= start_dt:
         return RedirectResponse(
             f"/admin/opportunities/{shift.opportunity_id}/edit?error=Shift+end+time+must+be+after+its+start+time.",
@@ -548,6 +572,15 @@ async def admin_shift_edit(
     shift.notes = notes.strip() if notes else None
     await audit.record(db, request, "shift.edit", f"Edited shift {shift_id}", entity_type="shift", entity_id=shift_id)
     await db.commit()
+    # Rescheduling can move the date span shown in an already-posted announcement.
+    opp = (
+        await db.execute(
+            select(Opportunity).options(selectinload(Opportunity.shifts))
+            .where(Opportunity.id == shift.opportunity_id)
+        )
+    ).scalars().first()
+    if opp:
+        await update_announcement(db, opp)
     return RedirectResponse(f"/admin/opportunities/{shift.opportunity_id}/edit", status_code=303)
 
 
@@ -580,6 +613,15 @@ async def admin_shift_delete(shift_id: int, request: Request, db: AsyncSession =
         await db.execute(delete(Shift).where(Shift.id == shift_id))
         await audit.record(db, request, "shift.delete", f"Deleted shift {shift_id}", entity_type="shift", entity_id=shift_id)
         await db.commit()
+        # Removing a shift can shrink (or empty out) the date span an already-posted
+        # announcement shows.
+        opp = (
+            await db.execute(
+                select(Opportunity).options(selectinload(Opportunity.shifts)).where(Opportunity.id == opp_id)
+            )
+        ).scalars().first()
+        if opp:
+            await update_announcement(db, opp)
         return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
     return RedirectResponse("/admin/opportunities", status_code=303)
 

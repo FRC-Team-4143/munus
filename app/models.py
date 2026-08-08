@@ -139,6 +139,12 @@ class Opportunity(Base):
     is_required: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+    # Where the new-opportunity announcement (services.opportunities.announce_opportunity)
+    # was posted, if it ever was — lets a later edit push the change to that same message
+    # via chat.update (services.opportunities.update_announcement) instead of leaving it
+    # stale. Both null until the first successful post.
+    announcement_channel_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    announcement_ts: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
     shifts: Mapped[List["Shift"]] = relationship(
         "Shift", back_populates="opportunity", cascade="all, delete-orphan"

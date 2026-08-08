@@ -63,6 +63,19 @@ async def test_required_opportunity_shows_badge_in_listing(
     assert listing.text.count('<span class="required-badge">REQUIRED</span>') == 1
 
 
+async def test_shift_detail_shows_hours_worth(client, make_student, make_opportunity, make_shift):
+    """A quick '(N hrs) label next to each shift's date/time, so a student can tell at
+    a glance how much a shift is worth without doing the math themselves."""
+    await make_student(code="ada00001")
+    opp = await make_opportunity(name="Food Drive")
+    await make_shift(opp.id, start_in_hours=24, length_hours=6.5)
+
+    await _identify(client, "ada00001")
+    detail = await client.get(f"/opportunities/{opp.id}")
+    assert detail.status_code == 200
+    assert "(6.50 hrs)" in detail.text
+
+
 async def test_shift_detail_shows_signed_up_roster(
     client, db, make_student, make_opportunity, make_shift
 ):

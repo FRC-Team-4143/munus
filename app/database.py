@@ -41,6 +41,7 @@ async def init_db() -> None:
         await conn.run_sync(_add_mentor_member_code_column)
         await conn.run_sync(_add_opportunity_is_continuous_column)
         await conn.run_sync(_add_opportunity_is_required_column)
+        await conn.run_sync(_add_opportunity_announcement_columns)
 
     await _seed_level_requirements()
 
@@ -95,6 +96,19 @@ def _add_opportunity_is_required_column(conn) -> None:
         conn.execute(text(
             "ALTER TABLE opportunities ADD COLUMN is_required BOOLEAN NOT NULL DEFAULT 0"
         ))
+
+
+def _add_opportunity_announcement_columns(conn) -> None:
+    """Add `announcement_channel_id`/`announcement_ts` to opportunities if not already
+    present — where the new-opportunity Slack announcement was posted, so a later edit
+    can push the change to that same message. No-op on a fresh schema."""
+    from sqlalchemy import inspect, text
+    inspector = inspect(conn)
+    columns = [c["name"] for c in inspector.get_columns("opportunities")]
+    if "announcement_channel_id" not in columns:
+        conn.execute(text("ALTER TABLE opportunities ADD COLUMN announcement_channel_id VARCHAR(32)"))
+    if "announcement_ts" not in columns:
+        conn.execute(text("ALTER TABLE opportunities ADD COLUMN announcement_ts VARCHAR(32)"))
 
 
 def _migration_drop_students_if_legacy_schema(conn) -> None:

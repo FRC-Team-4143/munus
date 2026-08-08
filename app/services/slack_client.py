@@ -76,3 +76,20 @@ async def post_to_channel(channel_id: str, text: str, blocks=None, automated: bo
         return result["ts"]
     except Exception:
         return None
+
+
+async def update_channel_message(
+    channel_id: str, ts: str, text: str, blocks=None, automated: bool = True
+) -> bool:
+    """Edit an already-posted channel message in place. Returns True on success.
+    If automated=True, skips (returning False) when updates_enabled is false."""
+    if not channel_id or not ts:
+        return False
+    if automated and not settings.updates_enabled:
+        return False
+    client = get_slack_client()
+    try:
+        await client.chat_update(channel=channel_id, ts=ts, text=text, blocks=blocks)
+        return True
+    except Exception:
+        return False

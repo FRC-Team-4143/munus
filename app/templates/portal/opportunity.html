@@ -53,20 +53,24 @@
         {% if shift_rows %}
         <ul class="list-group list-group-flush">
           {% for r in shift_rows %}
-          <li class="list-group-item bg-transparent d-flex justify-content-between align-items-center flex-wrap gap-2" style="border-color:#2a1a1a;">
-            <div>
-              <div>{{ r.shift.start_time | shiftrange(r.shift.end_time) }}</div>
-              <div class="small text-muted">
-                {% if r.shift.notes %}{{ r.shift.notes }} · {% endif %}
-                {% if r.remaining is none %}Open — unlimited spots
-                {% elif r.is_full %}<span class="text-danger">Full</span>
-                {% else %}{{ r.remaining }} spot{{ '' if r.remaining == 1 else 's' }} left{% endif %}
-              </div>
+          <li class="list-group-item bg-transparent d-flex justify-content-between align-items-start gap-2" style="border-color:#2a1a1a;">
+            <div class="flex-grow-1" style="min-width:0;">
+              <div>{{ r.shift.start_time | shiftrange(r.shift.end_time) }} <span class="text-muted">({{ '%.2f' % r.hours }} hrs)</span></div>
+              {% if r.shift.notes %}<div class="small text-muted">{{ r.shift.notes }}</div>{% endif %}
               {% if r.roster %}
               <div class="small text-muted mt-1"><i class="bi bi-people me-1"></i>{{ r.roster | join(', ') }}</div>
               {% endif %}
             </div>
-            <div>
+            <div class="flex-shrink-0 text-end">
+              <div class="mb-2">
+                {% if r.remaining is none %}
+                <span class="badge bg-secondary">Unlimited spots</span>
+                {% elif r.is_full %}
+                <span class="badge bg-danger">Full</span>
+                {% else %}
+                <span class="badge bg-success">{{ r.remaining }} spot{{ '' if r.remaining == 1 else 's' }} left</span>
+                {% endif %}
+              </div>
               {% if r.signed_up %}
               <form method="post" action="/signups/{{ r.signup_id }}/cancel" class="d-inline">
                 <span class="badge bg-success me-2"><i class="bi bi-check-lg"></i> Signed up</span>

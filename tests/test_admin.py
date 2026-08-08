@@ -409,7 +409,7 @@ async def test_admin_create_opportunity_and_shift(client):
     # Add a shift to it.
     opp_id = edit_url.rstrip("/edit").split("/")[-1]
     resp = await client.post(f"/admin/opportunities/{opp_id}/shifts", data={
-        "start_time": "2026-08-01T09:00", "end_time": "2026-08-01T12:00",
+        "date": "2026-08-01", "start_time": "09:00", "end_time": "12:00",
         "capacity": "6", "notes": "Bring gloves",
     })
     assert resp.status_code == 303
@@ -424,7 +424,7 @@ async def test_shift_create_rejects_end_before_start(client, db, make_opportunit
     opp = await make_opportunity()
     resp = await client.post(
         f"/admin/opportunities/{opp.id}/shifts",
-        data={"start_time": "2026-08-01T15:00", "end_time": "2026-08-01T14:00", "capacity": "0"},
+        data={"date": "2026-08-01", "start_time": "15:00", "end_time": "14:00", "capacity": "0"},
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -548,6 +548,175 @@ async def test_admin_edit_setting_continuous_clears_required(client, db, make_op
     assert opp.is_required is False
 
 
+async def test_admin_edit_syncs_slack_announcement_when_previously_posted(client, db, make_opportunity, monkeypatch):
+    """Editing an opportunity that already has a posted announcement (channel + ts on
+    record) pushes the new details to that same Slack message via chat.update."""
+    import app.services.opportunities as opp_module
+
+    calls = []
+
+    async def fake_update_channel_message(channel_id, ts, text, blocks=None, automated=True):
+        calls.append((channel_id, ts, text))
+        return True
+
+    monkeypatch.setattr(opp_module, "update_channel_message", fake_update_channel_message)
+
+    await _login(client)
+    opp = await make_opportunity(
+        name="Bag Night", announcement_channel_id="C0ANNOUNCE", announcement_ts="1699999999.000100",
+    )
+
+    resp = await client.post(f"/admin/opportunities/{opp.id}/edit", data={
+        "name": "Bag Night (Rescheduled)",
+    }, follow_redirects=False)
+    assert resp.status_code == 303
+
+    assert len(calls) == 1
+    channel_id, ts, text = calls[0]
+    assert channel_id == "C0ANNOUNCE"
+    assert ts == "1699999999.000100"
+    assert "Bag Night (Rescheduled)" in text
+
+
+async def test_admin_edit_does_not_call_slack_when_never_announced(client, db, make_opportunity, monkeypatch):
+    import app.services.opportunities as opp_module
+
+    async def fail_if_called(*a, **k):
+        raise AssertionError("update_channel_message should not be called")
+
+    monkeypatch.setattr(opp_module, "update_channel_message", fail_if_called)
+
+    await _login(client)
+    opp = await make_opportunity(name="Food Drive")
+
+    resp = await client.post(f"/admin/opportunities/{opp.id}/edit", data={
+        "name": "Food Drive (Updated)",
+    }, follow_redirects=False)
+    assert resp.status_code == 303
+
+
+async def test_first_shift_announcement_includes_date(client, db, make_opportunity, monkeypatch):
+    import app.services.opportunities as opp_module
+    from app.config import settings
+
+    calls = []
+
+    async def fake_post_to_channel(channel_id, text, blocks=None, automated=True):
+        calls.append(text)
+        return "1699999999.000100"
+
+    monkeypatch.setattr(opp_module, "post_to_channel", fake_post_to_channel)
+    original = settings.slack_announce_channel
+    settings.slack_announce_channel = "C0ANNOUNCE"
+    try:
+        await _login(client)
+        opp = await make_opportunity(name="Bag Night")
+
+        resp = await client.post(f"/admin/opportunities/{opp.id}/shifts", data={
+            "date": "2026-11-12", "start_time": "18:00", "end_time": "21:00", "capacity": "10",
+        }, follow_redirects=False)
+        assert resp.status_code == 303
+
+        assert len(calls) == 1
+        assert "📅" in calls[0] and "Nov" in calls[0]
+        await db.refresh(opp)
+        assert opp.announcement_channel_id == "C0ANNOUNCE"
+        assert opp.announcement_ts == "1699999999.000100"
+    finally:
+        settings.slack_announce_channel = original
+
+
+async def test_second_shift_updates_existing_announcement_instead_of_reposting(
+    client, db, make_opportunity, monkeypatch
+):
+    """Only the FIRST shift announces fresh; a later shift updates that same message
+    (its date span may now be wider) instead of posting a duplicate announcement."""
+    import app.services.opportunities as opp_module
+    from app.config import settings
+
+    post_calls = []
+    update_calls = []
+
+    async def fake_post_to_channel(channel_id, text, blocks=None, automated=True):
+        post_calls.append(text)
+        return "1699999999.000100"
+
+    async def fake_update_channel_message(channel_id, ts, text, blocks=None, automated=True):
+        update_calls.append(text)
+        return True
+
+    monkeypatch.setattr(opp_module, "post_to_channel", fake_post_to_channel)
+    monkeypatch.setattr(opp_module, "update_channel_message", fake_update_channel_message)
+    original = settings.slack_announce_channel
+    settings.slack_announce_channel = "C0ANNOUNCE"
+    try:
+        await _login(client)
+        opp = await make_opportunity(name="Bag Night")
+
+        await client.post(f"/admin/opportunities/{opp.id}/shifts", data={
+            "date": "2026-11-12", "start_time": "18:00", "end_time": "21:00", "capacity": "10",
+        })
+        assert len(post_calls) == 1
+        assert len(update_calls) == 0
+
+        await client.post(f"/admin/opportunities/{opp.id}/shifts", data={
+            "date": "2026-11-14", "start_time": "06:00", "end_time": "11:30", "capacity": "20",
+        })
+        assert len(post_calls) == 1  # still just the one original post
+        assert len(update_calls) == 1
+        assert "Nov" in update_calls[0]
+    finally:
+        settings.slack_announce_channel = original
+
+
+async def test_shift_edit_updates_announcement_date_span(client, db, make_opportunity, make_shift, monkeypatch):
+    import app.services.opportunities as opp_module
+
+    calls = []
+
+    async def fake_update_channel_message(channel_id, ts, text, blocks=None, automated=True):
+        calls.append(text)
+        return True
+
+    monkeypatch.setattr(opp_module, "update_channel_message", fake_update_channel_message)
+
+    await _login(client)
+    opp = await make_opportunity(
+        name="Bag Night", announcement_channel_id="C0ANNOUNCE", announcement_ts="1699999999.000100",
+    )
+    shift = await make_shift(opp.id)
+
+    resp = await client.post(f"/admin/shifts/{shift.id}/edit", data={
+        "date": "2026-12-25", "start_time": "09:00", "end_time": "12:00", "capacity": "0",
+    }, follow_redirects=False)
+    assert resp.status_code == 303
+
+    assert len(calls) == 1
+    assert "Dec" in calls[0]
+
+
+async def test_shift_delete_updates_announcement(client, db, make_opportunity, make_shift, monkeypatch):
+    import app.services.opportunities as opp_module
+
+    calls = []
+
+    async def fake_update_channel_message(channel_id, ts, text, blocks=None, automated=True):
+        calls.append(text)
+        return True
+
+    monkeypatch.setattr(opp_module, "update_channel_message", fake_update_channel_message)
+
+    await _login(client)
+    opp = await make_opportunity(
+        name="Bag Night", announcement_channel_id="C0ANNOUNCE", announcement_ts="1699999999.000100",
+    )
+    shift = await make_shift(opp.id)
+
+    resp = await client.post(f"/admin/shifts/{shift.id}/delete", follow_redirects=False)
+    assert resp.status_code == 303
+    assert len(calls) == 1
+
+
 async def test_admin_report_and_export_surface_missing_required_opportunity(client, db, make_student, make_opportunity, make_shift):
     from app.models import StudentLevel
 
@@ -576,7 +745,7 @@ async def test_admin_edit_shift_updates_fields(client, db, make_opportunity, mak
     resp = await client.post(
         f"/admin/shifts/{shift.id}/edit",
         data={
-            "start_time": "2026-09-01T09:00", "end_time": "2026-09-01T13:00",
+            "date": "2026-09-01", "start_time": "09:00", "end_time": "13:00",
             "capacity": "10", "notes": "Bring water",
         },
         follow_redirects=False,
@@ -601,7 +770,7 @@ async def test_admin_edit_shift_rejects_end_before_start(client, db, make_opport
 
     resp = await client.post(
         f"/admin/shifts/{shift.id}/edit",
-        data={"start_time": "2026-08-01T15:00", "end_time": "2026-08-01T14:00", "capacity": "0"},
+        data={"date": "2026-08-01", "start_time": "15:00", "end_time": "14:00", "capacity": "0"},
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -616,7 +785,7 @@ async def test_admin_edit_shift_requires_auth(client, db, make_opportunity, make
     shift = await make_shift(opp.id)
     resp = await client.post(
         f"/admin/shifts/{shift.id}/edit",
-        data={"start_time": "2026-09-01T09:00", "end_time": "2026-09-01T13:00", "capacity": "0"},
+        data={"date": "2026-09-01", "start_time": "09:00", "end_time": "13:00", "capacity": "0"},
         follow_redirects=False,
     )
     assert resp.status_code == 303
