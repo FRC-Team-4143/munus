@@ -38,34 +38,6 @@ async def test_admin_page_has_favicon(client):
     assert '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">' in resp.text
 
 
-async def test_send_prompt_button_dms_signed_up_students(
-    client, db, monkeypatch, make_student, make_opportunity, make_shift
-):
-    import app.routers.admin as adminmod
-    from app.models import Signup, SignupStatus
-
-    calls = []
-
-    async def fake_send_dm(uid, text, blocks=None):
-        calls.append((uid, blocks))
-        return "ts"
-
-    monkeypatch.setattr(adminmod, "send_dm", fake_send_dm)
-
-    await _login(client)
-    student = await make_student(slack="U0STU")
-    opp = await make_opportunity()
-    shift = await make_shift(opp.id)  # future shift — button ignores timing
-    db.add(Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.signed_up))
-    await db.commit()
-
-    resp = await client.post(f"/admin/shifts/{shift.id}/send-prompt", follow_redirects=False)
-    assert resp.status_code == 303
-    assert "prompt_sent=1" in resp.headers["location"]
-    assert len(calls) == 1 and calls[0][0] == "U0STU"
-    assert any(b.get("type") == "actions" for b in calls[0][1])  # interactive prompt
-
-
 async def test_opportunity_purge_requires_archived_then_cascades(
     client, db, make_student, make_opportunity, make_shift
 ):

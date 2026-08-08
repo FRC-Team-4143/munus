@@ -24,6 +24,19 @@ def test_announcement_button_is_a_direct_link_not_an_action():
         settings.base_url = original
 
 
+def test_announcement_flags_required_opportunity():
+    opp = Opportunity(id=1, name="Bag Night", is_required=True)
+    text, blocks = opportunity_announcement_blocks(opp)
+    assert "Required" in text
+    assert blocks[0]["text"]["text"] == text  # flag lives in the same section block
+
+
+def test_announcement_omits_required_flag_when_not_required():
+    opp = Opportunity(id=1, name="Food Drive", is_required=False)
+    text, _ = opportunity_announcement_blocks(opp)
+    assert "Required" not in text
+
+
 async def test_signup_and_capacity(db, make_student, make_mentor, make_opportunity, make_shift):
     opp = await make_opportunity()
     shift = await make_shift(opp.id, capacity=2)

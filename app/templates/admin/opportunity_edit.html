@@ -8,13 +8,6 @@
   <a href="/admin/opportunities" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left me-1"></i> Back</a>
 </div>
 
-{% if request.query_params.get('prompt_sent') is not none %}
-<div class="alert alert-success alert-dismissible fade show py-2" role="alert">
-  <i class="bi bi-send me-1"></i>
-  Sent the "log your hours" prompt to {{ request.query_params.get('prompt_sent') }} signed-up student(s) with a Slack ID.
-  <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
-</div>
-{% endif %}
 {% if request.query_params.get('error') %}
 <div class="alert alert-danger alert-dismissible fade show py-2" role="alert">
   <i class="bi bi-exclamation-triangle me-1"></i> {{ request.query_params.get('error') }}
@@ -120,12 +113,6 @@
                 <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#editShift{{ s.id }}">
                   <i class="bi bi-pencil"></i>
                 </button>
-                <form method="post" action="/admin/shifts/{{ s.id }}/send-prompt" class="d-inline"
-                      title="DM the 'log your hours' prompt to signed-up students now (for testing)">
-                  <button class="btn btn-sm btn-outline-secondary" {% if not counts[s.id] %}disabled{% endif %}>
-                    <i class="bi bi-send me-1"></i>Prompt
-                  </button>
-                </form>
                 <form method="post" action="/admin/shifts/{{ s.id }}/delete" class="d-inline" onsubmit="return confirm('Delete this shift and its signups?')">
                   <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
                 </form>

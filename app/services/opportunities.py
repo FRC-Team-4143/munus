@@ -98,6 +98,8 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     bootstrap `/enter` gives you — a deliberate trade for not needing a second,
     ephemeral reply message just to open the page."""
     lines = [f"✨ *New volunteer opportunity: {opp.name}*"]
+    if opp.is_required:
+        lines.append("🚨 *Required — every active student must sign up for at least 1 shift.*")
     if opp.description:
         lines.append(opp.description)
     if opp.location:

@@ -34,7 +34,7 @@ from app.services.requirements import (
 from app.services.slack_client import send_dm
 from app.services.sso import logout_url, make_authorize_url, sso_identity
 from app.utils import (
-    format_date_range, format_shift_range, local_to_utc, now_utc, shift_length_hours,
+    format_date_range, format_shift_range, local_to_utc, now_utc,
     today_local, utc_to_local,
 )
 
@@ -568,52 +568,6 @@ async def admin_shift_reviewer(
         await db.commit()
         return RedirectResponse(f"/admin/opportunities/{shift.opportunity_id}/edit", status_code=303)
     return RedirectResponse("/admin/opportunities", status_code=303)
-
-
-@router.post("/shifts/{shift_id}/send-prompt")
-async def admin_shift_send_prompt(shift_id: int, request: Request, db: AsyncSession = Depends(get_db)):
-    """Test helper: DM the interactive 'log your hours' prompt to this shift's signed-up
-    students right now, ignoring the usual end-time/prompted-once/already-submitted guards."""
-    if redirect := _require_auth(request):
-        return redirect
-
-    shift = (
-        await db.execute(select(Shift).options(selectinload(Shift.opportunity)).where(Shift.id == shift_id))
-    ).scalars().first()
-    if not shift:
-        return RedirectResponse("/admin/opportunities", status_code=303)
-
-    signups = (
-        await db.execute(
-            select(Signup)
-            .options(
-                selectinload(Signup.student),
-                selectinload(Signup.shift).selectinload(Shift.opportunity),
-            )
-            .where(Signup.shift_id == shift_id, Signup.status == SignupStatus.signed_up)
-        )
-    ).scalars().all()
-
-    default_hours = shift_length_hours(shift.start_time, shift.end_time)
-    sent = 0
-    for signup in signups:
-        student = signup.student
-        if student and student.slack_user_id:
-            await send_dm(
-                student.slack_user_id, "Log your volunteer hours",
-                blocks=submission_service.post_shift_blocks(signup, default_hours),
-            )
-            sent += 1
-
-    await audit.record(
-        db, request, "shift.test_prompt",
-        f"Sent test hours prompt for shift {shift_id} to {sent} student(s)",
-        entity_type="shift", entity_id=shift_id,
-    )
-    await db.commit()
-    return RedirectResponse(
-        f"/admin/opportunities/{shift.opportunity_id}/edit?prompt_sent={sent}", status_code=303
-    )
 
 
 @router.post("/shifts/{shift_id}/delete")
