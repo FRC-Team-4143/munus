@@ -1,4 +1,7 @@
 """End-to-end smoke tests for the student portal (exercises the Jinja templates)."""
+from urllib.parse import quote
+
+from app.config import settings
 from app.services.sso import SSO_COOKIE
 from tests.conftest import make_sso_cookie
 
@@ -187,7 +190,11 @@ async def test_signed_out_redirect_remembers_destination_through_signin(
 
     second = await client.get(first.headers["location"])
     assert second.status_code == 200
-    assert f"return_to=%2Fopportunities%2F{opp.id}" in second.text
+    # Must be absolute (Munus's own base_url + path), not a bare path — Legion's
+    # /sso/complete redirects to return_to as-is, and a relative path would resolve
+    # against Legion's own host instead of Munus's.
+    encoded_target = quote(f"{settings.base_url}/opportunities/{opp.id}", safe="")
+    assert f"return_to={encoded_target}" in second.text
 
 
 async def test_signin_redirect_falls_back_for_post_only_actions(client, make_opportunity):

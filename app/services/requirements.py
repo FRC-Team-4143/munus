@@ -5,13 +5,15 @@ The required hours for a student are driven entirely by their level. The values 
 stored in the `level_requirements` table (admin-editable) and fall back to
 DEFAULT_LEVEL_HOURS if a row is missing.
 """
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
-    DEFAULT_LEVEL_HOURS, HourSubmission, LevelRequirement, StudentLevel, SubmissionStatus,
+    DEFAULT_LEVEL_HOURS, HourSubmission, LevelRequirement, Opportunity, Shift,
+    StudentLevel, SubmissionStatus,
 )
 from app.services.app_settings import season_start_utc
 
@@ -54,6 +56,34 @@ async def level_requirements_map(db: AsyncSession) -> dict[StudentLevel, float]:
     for level, hours in DEFAULT_LEVEL_HOURS.items():
         by_level.setdefault(level, hours)
     return by_level
+
+
+async def season_required_opportunities(
+    db: AsyncSession, since: Optional[datetime]
+) -> list[Opportunity]:
+    """Shift-based opportunities flagged `is_required` that are 'live' for the current
+    season — i.e. have at least one shift on/after the season-start cutoff (`since`,
+    from `season_start_utc`), or any shift at all if there's no cutoff configured.
+    Mirrors the same cutoff `season_total_hours` uses for approved hours, so a new
+    student isn't dinged for a required opportunity that predates them.
+
+    Deliberately does NOT filter on `Opportunity.is_active`: the nightly auto-archive
+    job (see CLAUDE.md) flips a shift-based opportunity inactive once its last shift
+    ends, but a required opportunity that already happened must still count against
+    students who skipped it — otherwise the requirement would silently vanish right
+    after the event. `is_continuous.is_(False)` is belt-and-suspenders (the admin
+    routes never let a continuous opportunity be marked required in the first place).
+    """
+    q = (
+        select(Opportunity)
+        .join(Shift, Shift.opportunity_id == Opportunity.id)
+        .where(Opportunity.is_required.is_(True), Opportunity.is_continuous.is_(False))
+        .distinct()
+        .order_by(Opportunity.name)
+    )
+    if since is not None:
+        q = q.where(Shift.start_time >= since)
+    return list((await db.execute(q)).scalars().all())
 
 
 def derive_level(grade: Optional[str], team_number: Optional[int]) -> Optional[StudentLevel]:

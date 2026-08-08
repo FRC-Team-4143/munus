@@ -47,6 +47,13 @@
               This is an ongoing activity <small class="text-muted">(no scheduled shifts — students log hours anytime)</small>
             </label>
           </div>
+          <div class="form-check mb-3">
+            <input type="checkbox" class="form-check-input" name="is_required" value="true" id="edit_is_required"
+                   {% if opp.is_required %}checked{% endif %} {% if opp.is_continuous %}disabled{% endif %}>
+            <label class="form-check-label" for="edit_is_required">
+              Required <small class="text-muted">(every active student must sign up for at least 1 shift)</small>
+            </label>
+          </div>
           <button type="submit" class="btn btn-primary w-100">Save Details</button>
         </form>
       </div>
@@ -197,4 +204,17 @@
   </div>
 </div>
 {% endfor %}
+
+<script>
+  // Required only applies to shift-based opportunities — disable/uncheck it live
+  // when "ongoing activity" is checked (server also normalizes this on submit).
+  (function () {
+    var cont = document.getElementById('edit_is_continuous');
+    var req = document.getElementById('edit_is_required');
+    cont.addEventListener('change', function () {
+      req.disabled = cont.checked;
+      if (cont.checked) req.checked = false;
+    });
+  })();
+</script>
 {% endblock %}

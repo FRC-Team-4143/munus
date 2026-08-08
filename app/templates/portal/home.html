@@ -28,23 +28,23 @@
         <div class="d-flex justify-content-between align-items-end mb-2">
           <div>
             <div class="text-muted small">{{ student.level | levellabel }} · Season total</div>
-            <div class="fs-3 fw-bold">{{ '%.1f' % progress.total }} <span class="text-muted fs-6">/ {{ '%.1f' % progress.required }} hrs</span></div>
+            <div class="fs-3 fw-bold">{{ '%.2f' % progress.total }} <span class="text-muted fs-6">/ {{ '%.2f' % progress.required }} hrs</span></div>
           </div>
           {% if progress.total >= progress.required %}
           <span class="badge bg-success fs-6"><i class="bi bi-check-lg"></i> Met</span>
           {% else %}
-          <span class="badge bg-warning text-dark fs-6">{{ '%.1f' % progress.remaining }} hrs to go</span>
+          <span class="badge bg-warning text-dark fs-6">{{ '%.2f' % progress.remaining }} hrs to go</span>
           {% endif %}
         </div>
         <div class="progress" role="progressbar" style="height: 10px;">
           <div class="progress-bar bg-success" style="width: {{ progress.pct }}%;"></div>
           {% if progress.projected_pct > progress.pct %}
           <div class="progress-bar progress-bar-striped bar-projected" style="width: {{ progress.projected_pct - progress.pct }}%;"
-               title="Projected {{ '%.1f' % progress.projected }} hrs with upcoming shifts"></div>
+               title="Projected {{ '%.2f' % progress.projected }} hrs with upcoming shifts"></div>
           {% endif %}
         </div>
         {% if progress.projected > progress.total %}
-        <p class="text-muted small mt-2 mb-0">Projected <strong style="color:#7b6cf6;">{{ '%.1f' % progress.projected }} hrs</strong> with your upcoming shifts.</p>
+        <p class="text-muted small mt-2 mb-0">Projected <strong style="color:#7b6cf6;">{{ '%.2f' % progress.projected }} hrs</strong> with your upcoming shifts.</p>
         {% endif %}
       </div>
     </div>
@@ -85,7 +85,7 @@
             {% for s in recent %}
             <tr>
               <td>{{ s.opportunity.name if s.opportunity else '—' }}</td>
-              <td>{{ '%.1f' % s.hours }} hrs</td>
+              <td>{{ '%.2f' % s.hours }} hrs</td>
               <td><span class="badge {{ status_badge[s.status.value] }}">{{ s.status.value | capitalize }}</span></td>
               <td class="text-muted small">{{ s.submitted_at | localdt('%b %d') }}</td>
             </tr>

@@ -38,14 +38,14 @@
         <tr>
           <td>{{ s.student.name }}</td>
           <td>{{ s.opportunity.name if s.opportunity else '—' }}</td>
-          <td><span class="badge bg-secondary">{{ '%.1f' % s.hours }}</span></td>
+          <td><span class="badge bg-secondary">{{ '%.2f' % s.hours }}</span></td>
           <td>{{ s.reviewer.name if s.reviewer else '—' }}</td>
           <td><span class="badge {{ status_badge[s.status.value] }}">{{ s.status.value | capitalize }}</span></td>
           <td class="text-muted small">{{ s.submitted_at | localdt }}</td>
           <td class="text-end text-nowrap">
             <a href="/admin/submissions/{{ s.id }}/edit" class="btn btn-sm btn-outline-secondary">Edit</a>
             <form method="post" action="/admin/submissions/{{ s.id }}/delete" class="d-inline"
-                  onsubmit="return confirm('Delete {{ s.student.name }}\'s submission of {{ '%.1f' % s.hours }} hrs? This cannot be undone.')">
+                  onsubmit="return confirm('Delete {{ s.student.name }}\'s submission of {{ '%.2f' % s.hours }} hrs? This cannot be undone.')">
               <button class="btn btn-sm btn-outline-danger" title="Delete submission"><i class="bi bi-trash"></i></button>
             </form>
           </td>

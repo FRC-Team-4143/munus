@@ -349,6 +349,77 @@ async def test_admin_report_export_csv(client):
     assert "Student,Level,Approved Hours,Projected Hours" in resp.text
 
 
+async def test_admin_student_submissions_requires_auth(client, make_student):
+    student = await make_student()
+    resp = await client.get(f"/admin/students/{student.id}/submissions", follow_redirects=False)
+    assert resp.status_code == 303
+    assert "sso/authorize" in resp.headers["location"]
+
+
+async def test_admin_student_submissions_forbidden_without_group(client, make_student):
+    student = await make_student()
+    await _login(client, groups=())
+    resp = await client.get(f"/admin/students/{student.id}/submissions")
+    assert resp.status_code == 403
+
+
+async def test_admin_student_submissions_forbidden_for_manager(client, make_student):
+    # Managers may reach /admin/opportunities* and /admin/shifts/* only — not this route.
+    student = await make_student()
+    await _login(client, groups=("munus-manager",))
+    resp = await client.get(f"/admin/students/{student.id}/submissions")
+    assert resp.status_code == 403
+
+
+async def test_admin_student_submissions_scoped_to_student(client, db, make_student, make_opportunity):
+    from app.models import HourSubmission, SubmissionStatus
+
+    student_a = await make_student(name="Ada Lovelace", code="ada00001")
+    student_b = await make_student(name="Grace Hopper", code="grc00001")
+    opp_a = await make_opportunity(name="Beach Cleanup")
+    opp_b = await make_opportunity(name="Food Drive")
+    db.add_all([
+        HourSubmission(
+            student_id=student_a.id, opportunity_id=opp_a.id, hours=2.5,
+            status=SubmissionStatus.approved,
+        ),
+        HourSubmission(
+            student_id=student_a.id, opportunity_id=opp_a.id, hours=1.25,
+            status=SubmissionStatus.rejected, review_note="Didn't match the shift time.",
+        ),
+        HourSubmission(
+            student_id=student_b.id, opportunity_id=opp_b.id, hours=3.0,
+            status=SubmissionStatus.approved,
+        ),
+    ])
+    await db.commit()
+
+    await _login(client)
+    resp = await client.get(f"/admin/students/{student_a.id}/submissions")
+    assert resp.status_code == 200
+    assert "Beach Cleanup" in resp.text
+    assert "2.50" in resp.text
+    assert "1.25" in resp.text
+    assert "Didn&#39;t match the shift time." in resp.text or "Didn't match the shift time." in resp.text
+    # Student B's data must not leak into student A's fragment.
+    assert "Food Drive" not in resp.text
+    assert "3.00" not in resp.text
+
+
+async def test_admin_student_submissions_empty(client, make_student):
+    student = await make_student()
+    await _login(client)
+    resp = await client.get(f"/admin/students/{student.id}/submissions")
+    assert resp.status_code == 200
+    assert "No submissions yet." in resp.text
+
+
+async def test_admin_student_submissions_404_unknown_student(client):
+    await _login(client)
+    resp = await client.get("/admin/students/999999/submissions")
+    assert resp.status_code == 404
+
+
 async def test_admin_create_opportunity_and_shift(client):
     await _login(client)
     # Create opportunity -> redirects to its edit page.
@@ -442,6 +513,84 @@ async def test_admin_edit_opportunity_toggles_is_continuous(client, db, make_opp
     await client.post(f"/admin/opportunities/{opp.id}/edit", data={"name": "Outreach Committee"})
     await db.refresh(opp)
     assert opp.is_continuous is False
+
+
+async def test_admin_create_required_opportunity(client, db):
+    from app.models import Opportunity
+
+    await _login(client)
+    resp = await client.post("/admin/opportunities", data={
+        "name": "Bag Night", "is_required": "true",
+    }, follow_redirects=False)
+    assert resp.status_code == 303
+
+    opp = (await db.execute(select(Opportunity).where(Opportunity.name == "Bag Night"))).scalars().first()
+    assert opp.is_required is True
+
+
+async def test_admin_create_continuous_and_required_normalizes_to_not_required(client, db):
+    """is_required is only meaningful for shift-based opportunities -- the server
+    normalizes it off even if both checkboxes were posted (e.g. bypassing the
+    client-side JS toggle)."""
+    from app.models import Opportunity
+
+    await _login(client)
+    resp = await client.post("/admin/opportunities", data={
+        "name": "CAD Subteam", "is_continuous": "true", "is_required": "true",
+    }, follow_redirects=False)
+    assert resp.status_code == 303
+
+    opp = (await db.execute(select(Opportunity).where(Opportunity.name == "CAD Subteam"))).scalars().first()
+    assert opp.is_continuous is True
+    assert opp.is_required is False
+
+
+async def test_admin_edit_opportunity_toggles_is_required(client, db, make_opportunity):
+    await _login(client)
+    opp = await make_opportunity(name="Bag Night")
+    assert opp.is_required is False
+
+    resp = await client.post(f"/admin/opportunities/{opp.id}/edit", data={
+        "name": "Bag Night", "is_required": "true",
+    }, follow_redirects=False)
+    assert resp.status_code == 303
+
+    await db.refresh(opp)
+    assert opp.is_required is True
+
+    # Unchecking (the checkbox is simply absent from the posted form) reverts it.
+    await client.post(f"/admin/opportunities/{opp.id}/edit", data={"name": "Bag Night"})
+    await db.refresh(opp)
+    assert opp.is_required is False
+
+
+async def test_admin_edit_setting_continuous_clears_required(client, db, make_opportunity):
+    await _login(client)
+    opp = await make_opportunity(name="Bag Night", is_required=True)
+
+    await client.post(f"/admin/opportunities/{opp.id}/edit", data={
+        "name": "Bag Night", "is_continuous": "true", "is_required": "true",
+    })
+    await db.refresh(opp)
+    assert opp.is_continuous is True
+    assert opp.is_required is False
+
+
+async def test_admin_report_and_export_surface_missing_required_opportunity(client, db, make_student, make_opportunity, make_shift):
+    from app.models import StudentLevel
+
+    await _login(client)
+    await make_student(name="Ada Lovelace", level=StudentLevel.freshman)
+    opp = await make_opportunity(name="Bag Night", is_required=True)
+    await make_shift(opp.id, start_in_hours=24)
+
+    report = await client.get("/admin/report")
+    assert report.status_code == 200
+    assert 'title="Missing: Bag Night"' in report.text
+
+    export = await client.get("/admin/report/export")
+    assert export.status_code == 200
+    assert "Bag Night" in export.text
 
 
 async def test_admin_edit_shift_updates_fields(client, db, make_opportunity, make_shift):

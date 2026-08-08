@@ -27,7 +27,10 @@ from app.services import audit, submissions as submission_service
 from app.services.app_settings import get_season_start, season_start_utc, set_season_start
 from app.services.opportunities import announce_opportunity
 from app.services.reports import student_progress_report, student_vhours_message
-from app.services.requirements import level_requirements_map, resolve_required_hours, season_total_hours
+from app.services.requirements import (
+    level_requirements_map, resolve_required_hours, season_required_opportunities,
+    season_total_hours,
+)
 from app.services.slack_client import send_dm
 from app.services.sso import logout_url, make_authorize_url, sso_identity
 from app.utils import (
@@ -202,15 +205,16 @@ async def admin_dashboard(request: Request, db: AsyncSession = Depends(get_db)):
 #
 # Students/Mentors are a read-only mirror synced from Legion (services/legion_sync.py).
 # Add/edit/archive members in Legion's /admin, not here — this is just a view plus a
-# manual "Sync now" trigger for the hourly job (services/scheduler.py).
+# manual "Sync now" trigger for the hourly job (services/scheduler.py). Archived members
+# are filtered out entirely (no toggle) — Legion's own roster page is where to view them.
 
 @router.get("/roster", response_class=HTMLResponse)
 async def admin_roster(request: Request, db: AsyncSession = Depends(get_db)):
     if redirect := _require_auth(request):
         return redirect
 
-    student_q = select(Student).order_by(Student.name)
-    mentor_q = select(Mentor).order_by(Mentor.name)
+    student_q = select(Student).where(Student.is_active.is_(True)).order_by(Student.name)
+    mentor_q = select(Mentor).where(Mentor.is_active.is_(True)).order_by(Mentor.name)
 
     from app.services.app_settings import LEGION_LAST_SYNCED_KEY, get_setting
     last_synced = await get_setting(db, LEGION_LAST_SYNCED_KEY)
@@ -276,6 +280,7 @@ async def admin_opportunities_create(
     contact: Optional[str] = Form(None),
     reviewer_mentor_id: Optional[str] = Form(None),
     is_continuous: bool = Form(False),
+    is_required: bool = Form(False),
     db: AsyncSession = Depends(get_db),
 ):
     if redirect := _require_auth(request):
@@ -288,6 +293,10 @@ async def admin_opportunities_create(
         contact=contact.strip() if contact else None,
         reviewer_mentor_id=_opt_id(reviewer_mentor_id),
         is_continuous=is_continuous,
+        # Only meaningful for shift-based opportunities — normalize server-side even
+        # though the templates also disable the checkbox client-side (never trust
+        # client-only enforcement; this also guards a direct API POST).
+        is_required=(is_required and not is_continuous),
     )
     db.add(opp)
     await audit.record(db, request, "opportunity.create", f"Created opportunity {opp.name}", entity_type="opportunity")
@@ -348,6 +357,7 @@ async def admin_opportunities_edit_post(
     contact: Optional[str] = Form(None),
     reviewer_mentor_id: Optional[str] = Form(None),
     is_continuous: bool = Form(False),
+    is_required: bool = Form(False),
     db: AsyncSession = Depends(get_db),
 ):
     if redirect := _require_auth(request):
@@ -361,6 +371,7 @@ async def admin_opportunities_edit_post(
         opp.contact = contact.strip() if contact else None
         opp.reviewer_mentor_id = _opt_id(reviewer_mentor_id)
         opp.is_continuous = is_continuous
+        opp.is_required = is_required and not is_continuous
         await audit.record(db, request, "opportunity.edit", f"Edited opportunity {opp.name}", entity_type="opportunity", entity_id=opp.id)
         await db.commit()
     return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
@@ -772,7 +783,7 @@ async def admin_submissions_new_post(
     student = (await db.execute(select(Student).where(Student.id == student_id))).scalars().first()
     await audit.record(
         db, request, "submission.add",
-        f"Added {hours:.1f} manual hours ({new_status.value}) for "
+        f"Added {hours:.2f} manual hours ({new_status.value}) for "
         f"{student.name if student else student_id}",
         entity_type="submission", entity_id=submission.id,
     )
@@ -874,7 +885,7 @@ async def admin_submissions_decision(
         verb = "approved" if status == SubmissionStatus.approved else "rejected"
         await audit.record(
             db, request, f"submission.{verb}",
-            f"admin {verb} {submission.student.name}'s submission ({submission.hours:.1f} hrs)",
+            f"admin {verb} {submission.student.name}'s submission ({submission.hours:.2f} hrs)",
             entity_type="submission", entity_id=submission.id,
         )
         await db.commit()
@@ -897,7 +908,7 @@ async def admin_submissions_delete(submission_id: int, request: Request, db: Asy
         who = submission.student.name if submission.student else "unknown"
         await audit.record(
             db, request, "submission.delete",
-            f"Deleted {who}'s submission ({submission.hours:.1f} hrs, {submission.status.value})",
+            f"Deleted {who}'s submission ({submission.hours:.2f} hrs, {submission.status.value})",
             entity_type="submission", entity_id=submission_id,
         )
         await db.execute(delete(HourSubmission).where(HourSubmission.id == submission_id))
@@ -1152,6 +1163,9 @@ async def admin_report(
         db, level=level_filter, include_archived=bool(show_archived)
     )
     met = sum(1 for r in rows if r["met"])
+    required_opportunity_names = [
+        o.name for o in await season_required_opportunities(db, await season_start_utc(db))
+    ]
     return templates.TemplateResponse(
         "admin/report.html",
         {
@@ -1161,7 +1175,33 @@ async def admin_report(
             "current_level": level_filter.value if level_filter else "",
             "show_archived": bool(show_archived),
             "met_count": met,
+            "required_opportunity_names": required_opportunity_names,
         },
+    )
+
+
+@router.get("/students/{student_id}/submissions", response_class=HTMLResponse)
+async def admin_student_submissions(student_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """HTML fragment of a single student's full submission history, for the Report
+    screen's name-click modal. Fetched via JS, not navigated to directly — a 404 here
+    (rather than the RedirectResponse other admin "not found" routes use) renders as an
+    error fragment in the modal instead of silently swapping in an unrelated page."""
+    if redirect := _require_auth(request):
+        return redirect
+    student = (await db.execute(select(Student).where(Student.id == student_id))).scalars().first()
+    if not student:
+        return HTMLResponse('<div class="alert alert-danger mb-0">Student not found.</div>', status_code=404)
+    subs = (
+        await db.execute(
+            select(HourSubmission)
+            .options(selectinload(HourSubmission.opportunity), selectinload(HourSubmission.reviewer))
+            .where(HourSubmission.student_id == student.id)
+            .order_by(HourSubmission.submitted_at.desc())
+        )
+    ).scalars().all()
+    return templates.TemplateResponse(
+        "admin/_student_submissions_fragment.html",
+        {"request": request, "student": student, "submissions": subs},
     )
 
 
@@ -1221,14 +1261,15 @@ async def admin_report_export(
     writer = csv.writer(output)
     writer.writerow([
         "Student", "Level", "Approved Hours", "Projected Hours", "Required Hours",
-        "Remaining", "Percent Complete", "Pending Submissions", "Upcoming Shifts", "Met",
+        "Remaining", "Percent Complete", "Pending Submissions", "Upcoming Shifts",
+        "Missing Required Opportunities", "Met",
     ])
     for r in rows:
         s = r["student"]
         writer.writerow([
             s.name, level_label(s.level), r["approved"], r["projected"], r["required"],
             r["remaining"], r["pct"], r["pending_count"], r["upcoming_count"],
-            "yes" if r["met"] else "no",
+            "; ".join(r["missing_required"]), "yes" if r["met"] else "no",
         ])
 
     return StreamingResponse(

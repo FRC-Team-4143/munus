@@ -51,8 +51,16 @@ def make_authorize_url(request: Request, *, return_to: Optional[str] = None) -> 
     Defaults `return_to` to the current page (mirrors Tempus, right for `/admin`'s
     "you hit a protected page cold" case); pass it explicitly for the portal's `/enter`
     bootstrap, which wants to land somewhere other than `/enter` itself.
+
+    An explicit `return_to` is always a bare Munus-relative path (e.g. from
+    `safe_next()`), so it must be made absolute here before handing it to Legion —
+    otherwise Legion's `/sso/complete` issues a plain relative redirect that resolves
+    against *Legion's* own host (since that's where `/sso/complete` runs), not Munus's.
     """
-    target = return_to if return_to is not None else str(request.url)
+    if return_to is not None:
+        target = return_to if urlparse(return_to).netloc else f"{settings.base_url}{return_to}"
+    else:
+        target = str(request.url)
     return f"{settings.legion_base_url}/sso/authorize?app=munus&return_to={quote(target, safe='')}"
 
 

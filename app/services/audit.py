@@ -21,8 +21,8 @@ def _client_ip(request: Optional[Request]) -> Optional[str]:
 
 
 def _actor_from_request(request: Optional[Request]) -> str:
-    """The signed-in admin/manager's identity for the actor column: their SSO username
-    (or name), falling back to "system" when there's no verified identity (e.g.
+    """The signed-in admin/manager's identity for the actor column: their SSO name
+    (or username), falling back to "system" when there's no verified identity (e.g.
     scheduled jobs)."""
     if request is None:
         return "system"
@@ -30,7 +30,7 @@ def _actor_from_request(request: Optional[Request]) -> str:
     identity = sso_identity(request)
     if identity is None:
         return "system"
-    return identity.get("username") or identity.get("name") or "system"
+    return identity.get("name") or identity.get("username") or "system"
 
 
 async def record(

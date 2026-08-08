@@ -251,7 +251,7 @@ async def _handle_quick_log(db, background_tasks, value, acting_slack_id, respon
     await _finish_log(
         db, background_tasks, signup, submission, reply,
         already_msg="✅ You've already logged hours for this shift.",
-        done_msg=lambda s, dest: f"✅ Logged {s.hours:.1f} hrs — {dest}.",
+        done_msg=lambda s, dest: f"✅ Logged {s.hours:.2f} hrs — {dest}.",
     )
     return Response(status_code=200)
 
@@ -271,7 +271,7 @@ async def _handle_adjust(db, background_tasks, value, acting_slack_id, trigger_i
         from slack_sdk.webhook.async_client import AsyncWebhookClient
         background_tasks.add_task(
             AsyncWebhookClient(response_url).send,
-            text=(f"⚠️ Couldn't open the hours form. Tap *✅ Log {default_hours:.1f} hrs* "
+            text=(f"⚠️ Couldn't open the hours form. Tap *✅ Log {default_hours:.2f} hrs* "
                   f"to log the scheduled time, or ask an admin."),
             replace_original=False,
         )
@@ -312,7 +312,7 @@ async def _handle_log_hours_submit(db, background_tasks, view, acting_slack_id):
     await _finish_log(
         db, background_tasks, signup, submission, dm,
         already_msg="You've already logged hours for this shift.",
-        done_msg=lambda s, dest: f"✅ Logged {s.hours:.1f} hrs — {dest}.",
+        done_msg=lambda s, dest: f"✅ Logged {s.hours:.2f} hrs — {dest}.",
     )
     return Response(status_code=200)  # empty 200 closes the modal
 
@@ -408,7 +408,7 @@ async def _handle_review(request, db, background_tasks, action_id, value, review
     verb = "approved" if status == SubmissionStatus.approved else "rejected"
     await audit.record(
         db, request, f"submission.{verb}",
-        f"{actor} {verb} {submission.student.name}'s submission ({submission.hours:.1f} hrs) via Slack",
+        f"{actor} {verb} {submission.student.name}'s submission ({submission.hours:.2f} hrs) via Slack",
         entity_type="submission", entity_id=submission.id, actor=actor,
         detail={"student": submission.student.name, "hours": submission.hours, "via": "slack"},
     )
@@ -426,7 +426,7 @@ async def _handle_review(request, db, background_tasks, action_id, value, review
                 "type": "mrkdwn",
                 "text": (
                     f"{icon} *{verb.capitalize()} — {submission.student.name}*\n"
-                    f"{submission.hours:.1f} hrs · the student has been notified."
+                    f"{submission.hours:.2f} hrs · the student has been notified."
                 ),
             },
         }],

@@ -73,7 +73,10 @@
 <div class="card">
   <div class="card-header d-flex justify-content-between">
     <span>{{ rows|length }} student{{ 's' if rows|length != 1 else '' }}</span>
-    <span class="text-muted">{{ met_count }}/{{ rows|length }} met requirement</span>
+    <span class="text-muted">
+      {{ met_count }}/{{ rows|length }} met requirement
+      {% if required_opportunity_names %} · {{ required_opportunity_names|length }} required opportunit{{ 'y' if required_opportunity_names|length == 1 else 'ies' }} this season{% endif %}
+    </span>
   </div>
   <div class="card-body p-0" style="overflow-x: auto;">
     <table class="table table-hover mb-0 report-table">
@@ -87,19 +90,26 @@
           <th>Progress</th>
           <th class="text-center">Pending</th>
           <th class="text-center">Upcoming</th>
+          <th class="text-center sortable" data-type="num">Required Opps</th>
           <th class="text-center sortable" data-type="num">Met</th>
         </tr>
       </thead>
       <tbody>
         {% for r in rows %}
         <tr>
-          <td data-sort="{{ r.student.name }}">{{ r.student.name }}{% if not r.student.is_active %}<span class="badge bg-secondary ms-1">Archived</span>{% endif %}</td>
-          <td class="text-muted" data-sort="{{ r.student.level | levellabel }}">{{ r.student.level | levellabel }}</td>
-          <td class="text-end fw-semibold" data-sort="{{ r.approved }}">{{ '%.1f' % r.approved }}</td>
-          <td class="text-end" data-sort="{{ r.projected }}">
-            {{ '%.1f' % r.projected }}{% if r.projected > r.approved %}<i class="bi bi-arrow-up-short text-success"></i>{% endif %}
+          <td data-sort="{{ r.student.name }}">
+            <button type="button" class="btn btn-link p-0 align-baseline" data-bs-toggle="modal"
+                    data-bs-target="#studentSubsModal" data-student-id="{{ r.student.id }}" data-student-name="{{ r.student.name }}">
+              {{ r.student.name }}
+            </button>
+            {% if not r.student.is_active %}<span class="badge bg-secondary ms-1">Archived</span>{% endif %}
           </td>
-          <td class="text-end text-muted" data-sort="{{ r.required }}">{{ '%.1f' % r.required }}</td>
+          <td class="text-muted" data-sort="{{ r.student.level | levellabel }}">{{ r.student.level | levellabel }}</td>
+          <td class="text-end fw-semibold" data-sort="{{ r.approved }}">{{ '%.2f' % r.approved }}</td>
+          <td class="text-end" data-sort="{{ r.projected }}">
+            {{ '%.2f' % r.projected }}{% if r.projected > r.approved %}<i class="bi bi-arrow-up-short text-success"></i>{% endif %}
+          </td>
+          <td class="text-end text-muted" data-sort="{{ r.required }}">{{ '%.2f' % r.required }}</td>
           <td data-sort="{{ r.pct }}">
             <div class="progress mini-progress" title="{{ r.pct }}% approved · {{ r.projected_pct }}% projected">
               <div class="progress-bar bg-success" style="width: {{ r.pct }}%;"></div>
@@ -110,8 +120,15 @@
           </td>
           <td class="text-center" data-sort="{{ r.pending_count }}">{% if r.pending_count %}<span class="badge bg-warning text-dark">{{ r.pending_count }}</span>{% else %}—{% endif %}</td>
           <td class="text-center" data-sort="{{ r.upcoming_count }}">{% if r.upcoming_count %}<span class="badge bg-secondary">{{ r.upcoming_count }}</span>{% else %}—{% endif %}</td>
+          <td class="text-center" data-sort="{{ r.missing_required|length }}">
+            {% if r.missing_required %}
+            <span class="badge bg-danger" title="Missing: {{ r.missing_required|join(', ') }}">{{ r.missing_required|length }} missing</span>
+            {% else %}
+            <i class="bi bi-check-circle-fill text-success" title="All required opportunities complete"></i>
+            {% endif %}
+          </td>
           <td class="text-center" data-sort="{{ r.remaining if not r.met else 0 }}">
-            {% if r.met %}<i class="bi bi-check-circle-fill text-success"></i>{% else %}<span class="text-warning">{{ '%.1f' % r.remaining }}h</span>{% endif %}
+            {% if r.met %}<i class="bi bi-check-circle-fill text-success"></i>{% else %}<span class="text-warning">{{ '%.2f' % r.remaining }}h</span>{% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -120,7 +137,50 @@
   </div>
 </div>
 
+<div class="modal fade" id="studentSubsModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="studentSubsModalLabel">Submissions</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="text-muted text-center py-4"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
+  (function () {
+    var LOADING_HTML = '<div class="text-muted text-center py-4"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>';
+    var modalEl = document.getElementById('studentSubsModal');
+    var titleEl = document.getElementById('studentSubsModalLabel');
+    var bodyEl = modalEl.querySelector('.modal-body');
+
+    modalEl.addEventListener('show.bs.modal', function (event) {
+      var btn = event.relatedTarget;
+      var id = btn.dataset.studentId;
+      var name = btn.dataset.studentName;
+      titleEl.textContent = name + ' — Submissions';
+      bodyEl.innerHTML = LOADING_HTML;
+      fetch('/admin/students/' + id + '/submissions')
+        .then(function (r) {
+          if (!r.ok) { throw new Error('request failed'); }
+          return r.text();
+        })
+        .then(function (html) { bodyEl.innerHTML = html; })
+        .catch(function () {
+          bodyEl.innerHTML = '<div class="alert alert-danger mb-0">Couldn\'t load submissions. Try again.</div>';
+        });
+    });
+
+    modalEl.addEventListener('hidden.bs.modal', function () {
+      titleEl.textContent = 'Submissions';
+      bodyEl.innerHTML = LOADING_HTML;
+    });
+  })();
+
   // Click a column header to sort the table by that column; click again to reverse.
   document.querySelectorAll('.report-table th.sortable').forEach(function (th) {
     th.addEventListener('click', function () {

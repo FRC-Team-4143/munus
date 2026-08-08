@@ -30,7 +30,7 @@
       <tbody>
         {% for o in opps %}
         <tr {% if not o.is_active %}class="table-secondary"{% endif %}>
-          <td>{{ o.name }}{% if o.is_continuous %}<span class="badge bg-info ms-1">Ongoing</span>{% endif %}{% if not o.is_active %}<span class="badge bg-secondary ms-1">Archived</span>{% endif %}</td>
+          <td>{{ o.name }}{% if o.is_continuous %}<span class="badge bg-info ms-1">Ongoing</span>{% endif %}{% if o.is_required %}<span class="badge bg-primary ms-1">Required</span>{% endif %}{% if not o.is_active %}<span class="badge bg-secondary ms-1">Archived</span>{% endif %}</td>
           <td class="text-muted">{{ o.location or '—' }}</td>
           <td class="text-muted small">{{ '—' if o.is_continuous else (o.shifts | daterange or '—') }}</td>
           <td>{{ '—' if o.is_continuous else o.shifts | length }}</td>
@@ -88,6 +88,12 @@
               This is an ongoing activity <small class="text-muted">(no scheduled shifts — students log hours anytime)</small>
             </label>
           </div>
+          <div class="form-check mt-2">
+            <input type="checkbox" class="form-check-input" name="is_required" value="true" id="add_is_required">
+            <label class="form-check-label" for="add_is_required">
+              Required <small class="text-muted">(every active student must sign up for at least 1 shift)</small>
+            </label>
+          </div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -97,4 +103,17 @@
     </div>
   </div>
 </div>
+
+<script>
+  // Required only applies to shift-based opportunities — disable/uncheck it live
+  // when "ongoing activity" is checked (server also normalizes this on submit).
+  (function () {
+    var cont = document.getElementById('add_is_continuous');
+    var req = document.getElementById('add_is_required');
+    cont.addEventListener('change', function () {
+      req.disabled = cont.checked;
+      if (cont.checked) req.checked = false;
+    });
+  })();
+</script>
 {% endblock %}

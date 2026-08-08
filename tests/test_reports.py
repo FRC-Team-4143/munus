@@ -1,4 +1,7 @@
+from datetime import datetime, timedelta
+
 from app.models import HourSubmission, Signup, SignupStatus, StudentLevel, SubmissionStatus
+from app.services.app_settings import set_season_start
 from app.services.reports import student_progress_report
 
 
@@ -49,6 +52,7 @@ async def test_report_sticky_projected(db, make_student, make_opportunity, make_
     assert r["met"] is False
     assert r["pending_count"] == 1
     assert r["upcoming_count"] == 1  # only the shift that hasn't ended
+    assert r["missing_required"] == []  # no required opportunities configured
 
 
 async def test_report_level_filter_and_archived(db, make_student):
@@ -58,6 +62,7 @@ async def test_report_level_filter_and_archived(db, make_student):
 
     all_rows = await student_progress_report(db)
     assert {r["student"].name for r in all_rows} == {"Fresh", "Senior"}  # archived excluded
+    assert all(r["missing_required"] == [] for r in all_rows)
 
     fresh_only = await student_progress_report(db, level=StudentLevel.freshman)
     assert {r["student"].name for r in fresh_only} == {"Fresh"}
@@ -91,3 +96,102 @@ async def test_report_met_when_requirement_reached(db, make_student):
     assert r["met"] is True
     assert r["remaining"] == 0.0
     assert r["pct"] == 100
+    assert r["missing_required"] == []
+
+
+async def test_report_missing_required_opportunity(db, make_student, make_opportunity, make_shift):
+    student = await make_student(level=StudentLevel.freshman)
+    opp = await make_opportunity(name="Bag Night", is_required=True)
+    await make_shift(opp.id, start_in_hours=24)
+
+    r = (await student_progress_report(db))[0]
+    assert r["missing_required"] == ["Bag Night"]
+
+
+async def test_report_fulfilled_required_opportunity_via_signup(db, make_student, make_opportunity, make_shift):
+    student = await make_student(level=StudentLevel.freshman)
+    opp = await make_opportunity(name="Bag Night", is_required=True)
+    shift = await make_shift(opp.id, start_in_hours=24)
+    db.add(Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    r = (await student_progress_report(db))[0]
+    assert r["missing_required"] == []
+
+
+async def test_report_cancelled_signup_does_not_fulfill_required(db, make_student, make_opportunity, make_shift):
+    student = await make_student(level=StudentLevel.freshman)
+    opp = await make_opportunity(name="Bag Night", is_required=True)
+    shift = await make_shift(opp.id, start_in_hours=24)
+    db.add(Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.cancelled))
+    await db.commit()
+
+    r = (await student_progress_report(db))[0]
+    assert r["missing_required"] == ["Bag Night"]
+
+
+async def test_report_stale_required_opportunity_not_flagged(db, make_student, make_opportunity, make_shift):
+    """The headline new-student-protection scenario: a required opportunity whose only
+    shift predates the season-start cutoff doesn't apply to anyone -- old or new. A
+    second, live required opportunity is still correctly flagged."""
+    student = await make_student(level=StudentLevel.freshman)
+    old_opp = await make_opportunity(name="Old Fundraiser", is_required=True)
+    await make_shift(old_opp.id, start_in_hours=-24 * 40)
+    live_opp = await make_opportunity(name="Bag Night", is_required=True)
+    await make_shift(live_opp.id, start_in_hours=24)
+
+    await set_season_start(db, (datetime.utcnow() - timedelta(days=7)).date())
+
+    r = (await student_progress_report(db))[0]
+    assert r["missing_required"] == ["Bag Night"]
+
+
+async def test_report_stale_signup_does_not_fulfill_live_requirement(db, make_student, make_opportunity, make_shift):
+    """Fulfillment is scoped to the same season cutoff as the requirement itself -- a
+    signup for a pre-cutoff shift of an otherwise-live required opportunity doesn't
+    count, only a signup for a qualifying (post-cutoff) shift does."""
+    student = await make_student(level=StudentLevel.freshman)
+    opp = await make_opportunity(name="Bag Night", is_required=True)
+    old_shift = await make_shift(opp.id, start_in_hours=-24 * 40)
+    await make_shift(opp.id, start_in_hours=24)  # keeps the opportunity "live"
+    db.add(Signup(shift_id=old_shift.id, student_id=student.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    await set_season_start(db, (datetime.utcnow() - timedelta(days=7)).date())
+
+    r = (await student_progress_report(db))[0]
+    assert r["missing_required"] == ["Bag Night"]
+
+
+async def test_report_ignores_continuous_required_inconsistency(db, make_student, make_opportunity, make_shift):
+    student = await make_student(level=StudentLevel.freshman)
+    opp = await make_opportunity(name="CAD Subteam", is_required=True, is_continuous=True)
+    await make_shift(opp.id)
+
+    r = (await student_progress_report(db))[0]
+    assert r["missing_required"] == []
+
+
+async def test_report_archived_required_opportunity_still_flags_student(db, make_student, make_opportunity, make_shift):
+    student = await make_student(level=StudentLevel.freshman)
+    opp = await make_opportunity(name="Bag Night", is_required=True)
+    await make_shift(opp.id, start_in_hours=-5, length_hours=1)
+    opp.is_active = False
+    opp.archived_at = datetime.utcnow()
+    await db.commit()
+
+    r = (await student_progress_report(db))[0]
+    assert r["missing_required"] == ["Bag Night"]
+
+
+async def test_report_partial_fulfillment_across_multiple_required(db, make_student, make_opportunity, make_shift):
+    student = await make_student(level=StudentLevel.freshman)
+    fulfilled_opp = await make_opportunity(name="Bag Night", is_required=True)
+    fulfilled_shift = await make_shift(fulfilled_opp.id, start_in_hours=24)
+    db.add(Signup(shift_id=fulfilled_shift.id, student_id=student.id, status=SignupStatus.signed_up))
+    missed_opp = await make_opportunity(name="Fundraiser", is_required=True)
+    await make_shift(missed_opp.id, start_in_hours=48)
+    await db.commit()
+
+    r = (await student_progress_report(db))[0]
+    assert r["missing_required"] == ["Fundraiser"]

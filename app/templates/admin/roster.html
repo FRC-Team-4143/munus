@@ -43,21 +43,20 @@
       <div class="card-body p-0">
         <table class="table table-hover mb-0 align-middle">
           <thead class="table-light">
-            <tr><th>Name</th><th>Level</th><th>Grade</th><th>Team</th><th>Slack</th><th>Linked</th><th>Status</th></tr>
+            <tr><th>Name</th><th>Level</th><th>Grade</th><th>Team</th><th>Slack</th><th>Linked</th></tr>
           </thead>
           <tbody>
             {% for s in students %}
-            <tr {% if not s.is_active %}class="table-secondary"{% endif %}>
+            <tr>
               <td>{{ s.name }}</td>
               <td>{{ s.level | levellabel }}</td>
               <td>{{ s.grade or '—' }}</td>
               <td>{{ s.team_number or '—' }}</td>
               <td>{{ '✓' if s.slack_user_id else '—' }}</td>
               <td>{% if s.member_code %}<span class="badge bg-success">Legion</span>{% else %}<span class="badge bg-secondary">legacy</span>{% endif %}</td>
-              <td>{{ 'Active' if s.is_active else 'Archived' }}</td>
             </tr>
             {% else %}
-            <tr><td colspan="7" class="text-muted text-center">No students. Run a sync.</td></tr>
+            <tr><td colspan="6" class="text-muted text-center">No students. Run a sync.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -68,17 +67,16 @@
     <div class="card">
       <div class="card-body p-0">
         <table class="table table-hover mb-0 align-middle">
-          <thead class="table-light"><tr><th>Name</th><th>Slack</th><th>Linked</th><th>Status</th></tr></thead>
+          <thead class="table-light"><tr><th>Name</th><th>Slack</th><th>Linked</th></tr></thead>
           <tbody>
             {% for m in mentors %}
-            <tr {% if not m.is_active %}class="table-secondary"{% endif %}>
+            <tr>
               <td>{{ m.name }}</td>
               <td>{{ '✓' if m.slack_user_id else '—' }}</td>
               <td>{% if m.member_code %}<span class="badge bg-success">Legion</span>{% else %}<span class="badge bg-secondary">legacy</span>{% endif %}</td>
-              <td>{{ 'Active' if m.is_active else 'Archived' }}</td>
             </tr>
             {% else %}
-            <tr><td colspan="4" class="text-muted text-center">No mentors. Run a sync.</td></tr>
+            <tr><td colspan="3" class="text-muted text-center">No mentors. Run a sync.</td></tr>
             {% endfor %}
           </tbody>
         </table>

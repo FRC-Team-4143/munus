@@ -132,6 +132,13 @@ class Opportunity(Base):
     is_continuous: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )
+    # Every active student must sign up for >=1 shift of a required opportunity that's
+    # "live" this season (services.requirements.season_required_opportunities). Only
+    # meaningful for shift-based opportunities — admin routes force this False whenever
+    # is_continuous is True (see admin_opportunities_create/edit_post).
+    is_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
 
     shifts: Mapped[List["Shift"]] = relationship(
         "Shift", back_populates="opportunity", cascade="all, delete-orphan"

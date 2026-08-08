@@ -17,7 +17,8 @@ from app.models import (
 from app.services.app_settings import season_start_utc
 from app.services.opportunities import upcoming_signups_for_student
 from app.services.requirements import (
-    level_requirements_map, resolve_required_hours, season_total_hours,
+    level_requirements_map, resolve_required_hours, season_required_opportunities,
+    season_total_hours,
 )
 from app.utils import format_shift_range, now_utc, shift_length_hours
 
@@ -29,12 +30,18 @@ async def student_progress_report(
 ) -> list[dict]:
     """One dict per student (sorted by name):
       {student, approved, projected, required, remaining, pct, pending_count,
-       upcoming_count, met}
+       upcoming_count, met, missing_required}
 
     `projected` is a forward-looking estimate that stays stable across a shift's lifecycle:
     approved hours + pending submissions (at their submitted value) + the scheduled length
     of any signed-up shift not yet logged. A shift keeps counting until it is approved
     (counted at its real hours) or rejected (dropped).
+
+    `missing_required` is the list of names of required, shift-based opportunities
+    (services.requirements.season_required_opportunities) the student hasn't signed up
+    for a qualifying shift of — see that function's docstring for the season-cutoff
+    rules that keep a new student from being dinged for a required opportunity that
+    predates them.
     """
     student_q = select(Student).order_by(Student.name)
     if not include_archived:
@@ -119,6 +126,37 @@ async def student_progress_report(
 
     reqs = await level_requirements_map(db)
 
+    # Required, shift-based opportunities live for the current season (reuses the same
+    # `since` cutoff computed above for approved hours). For each, a student "fulfills"
+    # it via a signed_up Signup on one of *that opportunity's* qualifying shifts — a
+    # signup on a stale pre-season shift doesn't count either, for the same reason a
+    # pre-season required opportunity doesn't apply to a new student: the requirement
+    # and its fulfillment must be scoped to the same season.
+    required_opps = await season_required_opportunities(db, since)
+    missing_required: dict[int, list[str]] = {sid: [] for sid in student_ids}
+    if required_opps:
+        opp_ids = [o.id for o in required_opps]
+        opp_names_by_id = {o.id: o.name for o in required_opps}
+        fulfilled_q = (
+            select(Signup.student_id, Shift.opportunity_id)
+            .join(Shift, Shift.id == Signup.shift_id)
+            .where(
+                Signup.student_id.in_(student_ids),
+                Signup.status == SignupStatus.signed_up,
+                Shift.opportunity_id.in_(opp_ids),
+            )
+        )
+        if since is not None:
+            fulfilled_q = fulfilled_q.where(Shift.start_time >= since)
+        fulfilled_by_student: dict[int, set[int]] = {}
+        for sid, oid in (await db.execute(fulfilled_q)).all():
+            fulfilled_by_student.setdefault(sid, set()).add(oid)
+        for sid in student_ids:
+            have = fulfilled_by_student.get(sid, set())
+            missing_required[sid] = [
+                opp_names_by_id[oid] for oid in opp_ids if oid not in have
+            ]
+
     rows = []
     for s in students:
         approved = round(approved_by_student.get(s.id, 0.0), 2)
@@ -137,6 +175,7 @@ async def student_progress_report(
             "pending_count": pending_count.get(s.id, 0),
             "upcoming_count": upcoming_count.get(s.id, 0),
             "met": approved >= required,
+            "missing_required": missing_required.get(s.id, []),
         })
     return rows
 
@@ -159,14 +198,14 @@ async def student_vhours_message(db: AsyncSession, student: Student) -> str:
 
     reply = (
         f"{icon} *Your Volunteer Hours*\n"
-        f"Season total: *{total:.1f} / {required:.1f} hrs*"
+        f"Season total: *{total:.2f} / {required:.2f} hrs*"
     )
     if projected > total:
-        reply += f"\nProjected with upcoming shifts: *{projected:.1f} hrs*"
+        reply += f"\nProjected with upcoming shifts: *{projected:.2f} hrs*"
     if on_track:
         reply += "\nYou've met your requirement — great work! 💪"
     else:
-        reply += f"\n_{required - total:.1f} hrs still needed this season._"
+        reply += f"\n_{required - total:.2f} hrs still needed this season._"
 
     if upcoming:
         reply += "\n\n*Upcoming shifts:*"

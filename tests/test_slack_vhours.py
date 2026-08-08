@@ -33,7 +33,7 @@ async def test_vhours_for_linked_student(client, db, make_student):
     resp = await _post_vhours(client, "U0STUDENT")
     assert resp.status_code == 200
     # Freshman requirement default is 5.0; 3 approved hrs -> not yet met.
-    assert "3.0 / 5.0" in resp.text
+    assert "3.00 / 5.00" in resp.text
     assert "still needed" in resp.text
     # Ephemeral response carries a one-tap sign-in link to the dashboard, keyed on the
     # student's Legion member_code (no Legion round trip happens until it's clicked).

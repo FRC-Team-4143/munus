@@ -146,7 +146,7 @@ def _submission_summary(submission: HourSubmission) -> str:
     when = ""
     if submission.shift is not None:
         when = f" · {format_shift_range(submission.shift.start_time, submission.shift.end_time)}"
-    return f"{opp}{when} · {submission.hours:.1f} hrs"
+    return f"{opp}{when} · {submission.hours:.2f} hrs"
 
 
 def reviewer_blocks(submission: HourSubmission) -> list[dict]:
@@ -167,7 +167,7 @@ def reviewer_blocks(submission: HourSubmission) -> list[dict]:
                 "text": (
                     f"*Hour Submission — {student.name}*\n"
                     f"*{opp}* · {when}\n"
-                    f"Hours claimed: *{submission.hours:.1f}*\n"
+                    f"Hours claimed: *{submission.hours:.2f}*\n"
                     f"Report: {report}"
                 ),
             },
@@ -235,7 +235,7 @@ def review_hours_modal(submission: HourSubmission) -> dict:
                 "element": {
                     "type": "plain_text_input",
                     "action_id": "value",
-                    "initial_value": f"{submission.hours:.1f}",
+                    "initial_value": f"{submission.hours:.2f}",
                 },
             },
             {
@@ -261,7 +261,7 @@ def post_shift_blocks(signup: Signup, default_hours: float) -> list[dict]:
                 "text": (
                     f"📝 *Log your hours — {opp}*\n"
                     f"{format_shift_range(shift.start_time, shift.end_time)}\n"
-                    f"Scheduled: *{default_hours:.1f} hrs*"
+                    f"Scheduled: *{default_hours:.2f} hrs*"
                 ),
             },
         },
@@ -271,7 +271,7 @@ def post_shift_blocks(signup: Signup, default_hours: float) -> list[dict]:
             "elements": [
                 {
                     "type": "button",
-                    "text": {"type": "plain_text", "text": f"✅ Log {default_hours:.1f} hrs"},
+                    "text": {"type": "plain_text", "text": f"✅ Log {default_hours:.2f} hrs"},
                     "style": "primary",
                     "action_id": "hours_quick",
                     "value": str(signup.id),
@@ -313,7 +313,7 @@ def log_hours_modal(signup: Signup, default_hours: float) -> dict:
                 "element": {
                     "type": "plain_text_input",
                     "action_id": "value",
-                    "initial_value": f"{default_hours:.1f}",
+                    "initial_value": f"{default_hours:.2f}",
                 },
             },
             {
