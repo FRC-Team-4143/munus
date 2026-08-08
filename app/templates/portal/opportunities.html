@@ -2,6 +2,18 @@
 {% set active_page = "opportunities" %}
 {% block title %}Opportunities — Munus{% endblock %}
 
+{% block head %}
+<style>
+  /* Corner flare for a required opportunity — mirrors Legion's home-page "STAFF" tile badge. */
+  .required-badge {
+    position: absolute; top: 8px; right: 10px;
+    font-size: 0.65rem; font-weight: 700; letter-spacing: 0.05em;
+    color: #cc2200; background: rgba(204, 34, 0, 0.12);
+    border: 1px solid rgba(204, 34, 0, 0.4); border-radius: 4px; padding: 1px 6px;
+  }
+</style>
+{% endblock %}
+
 {% block content %}
 <h2 class="mb-4">Volunteer Opportunities</h2>
 
@@ -32,6 +44,7 @@
   {% for c in cards %}
   <div class="col-md-6 col-lg-4">
     <div class="card h-100">
+      {% if c.opp.is_required %}<span class="required-badge">REQUIRED</span>{% endif %}
       <div class="card-body d-flex flex-column">
         <h5 class="card-title">{{ c.opp.name }}</h5>
         {% if c.opp.location %}<div class="text-muted small mb-1"><i class="bi bi-geo-alt me-1"></i>{{ c.opp.location }}</div>{% endif %}

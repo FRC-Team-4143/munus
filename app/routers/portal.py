@@ -336,6 +336,22 @@ async def opportunity_detail(
         ).scalars().all()
     }
 
+    # Who else is signed up for each shift — helps a student pick a shift their
+    # friends are already on. One batched query for every shift on this page.
+    shift_ids = [s.id for s in shifts]
+    rosters: dict[int, list[str]] = {sid: [] for sid in shift_ids}
+    if shift_ids:
+        roster_rows = (
+            await db.execute(
+                select(Signup.shift_id, Student.name)
+                .join(Student, Student.id == Signup.student_id)
+                .where(Signup.shift_id.in_(shift_ids), Signup.status == SignupStatus.signed_up)
+                .order_by(Signup.created_at)
+            )
+        ).all()
+        for shift_id, name in roster_rows:
+            rosters[shift_id].append(name)
+
     shift_rows = []
     for shift in shifts:
         remaining = await opp_service.remaining_capacity(db, shift)
@@ -345,6 +361,7 @@ async def opportunity_detail(
             "is_full": remaining is not None and remaining <= 0,
             "signed_up": shift.id in my_signups,
             "signup_id": my_signups[shift.id].id if shift.id in my_signups else None,
+            "roster": rosters[shift.id],
         })
 
     return templates.TemplateResponse(

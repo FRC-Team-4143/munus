@@ -45,6 +45,51 @@ async def test_identify_and_browse(client, make_student, make_mentor, make_oppor
     assert "Season total" in my_hours.text
 
 
+async def test_required_opportunity_shows_badge_in_listing(
+    client, make_student, make_opportunity, make_shift
+):
+    await make_student(code="ada00001")
+    required_opp = await make_opportunity(name="Bag Night", is_required=True)
+    await make_shift(required_opp.id, start_in_hours=24)
+    optional_opp = await make_opportunity(name="Food Drive")
+    await make_shift(optional_opp.id, start_in_hours=24)
+
+    await _identify(client, "ada00001")
+
+    listing = await client.get("/opportunities")
+    assert listing.status_code == 200
+    # The badge appears once, attached to the required opportunity's card only
+    # (the CSS rule in <head> also contains the class name, so match the full tag).
+    assert listing.text.count('<span class="required-badge">REQUIRED</span>') == 1
+
+
+async def test_shift_detail_shows_signed_up_roster(
+    client, db, make_student, make_opportunity, make_shift
+):
+    """The opportunity detail page lists who's already signed up for each shift, so a
+    student can pick a shift their friends are on."""
+    from app.models import Signup, SignupStatus
+
+    await make_student(name="Ada Lovelace", code="ada00001")
+    friend = await make_student(name="Grace Hopper", code="grace001")
+    opp = await make_opportunity(name="Food Drive")
+    shift = await make_shift(opp.id, capacity=5, start_in_hours=24)
+    await make_shift(opp.id, capacity=5, start_in_hours=48)  # unfulfilled, no signups
+
+    db.add(Signup(shift_id=shift.id, student_id=friend.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    await _identify(client, "ada00001")
+    detail = await client.get(f"/opportunities/{opp.id}")
+    assert detail.status_code == 200
+    assert "Grace Hopper" in detail.text
+
+    # The roster is scoped to the shift the signup belongs to — nothing bleeds into
+    # the other shift's card. (Both shifts render, so this checks placement, not
+    # presence: count how many "Grace Hopper" mentions there are.)
+    assert detail.text.count("Grace Hopper") == 1
+
+
 async def test_opportunity_without_upcoming_shifts_hidden_from_listing(
     client, make_student, make_opportunity, make_shift
 ):

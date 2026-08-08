@@ -2,6 +2,15 @@
 {% set active_page = "opportunities" %}
 {% block title %}Opportunities — Munus Admin{% endblock %}
 
+{% block head %}
+<style>
+  /* Row navigates to the opportunity's edit page on click, except the actions column
+     (Notify/Edit & Shifts/Archive/Purge), which keeps its own click targets working. */
+  .opp-row { cursor: pointer; }
+  .opp-row td:last-child { cursor: default; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h2>Opportunities</h2>
@@ -29,7 +38,7 @@
       <thead class="table-light"><tr><th>Name</th><th>Location</th><th>Dates</th><th>Shifts</th><th></th></tr></thead>
       <tbody>
         {% for o in opps %}
-        <tr {% if not o.is_active %}class="table-secondary"{% endif %}>
+        <tr class="opp-row {% if not o.is_active %}table-secondary{% endif %}" data-href="/admin/opportunities/{{ o.id }}/edit">
           <td>{{ o.name }}{% if o.is_continuous %}<span class="badge bg-info ms-1">Ongoing</span>{% endif %}{% if o.is_required %}<span class="badge bg-primary ms-1">Required</span>{% endif %}{% if not o.is_active %}<span class="badge bg-secondary ms-1">Archived</span>{% endif %}</td>
           <td class="text-muted">{{ o.location or '—' }}</td>
           <td class="text-muted small">{{ '—' if o.is_continuous else (o.shifts | daterange or '—') }}</td>
@@ -115,5 +124,14 @@
       if (cont.checked) req.checked = false;
     });
   })();
+
+  // Clicking a row opens its edit page, except clicks on the actions column
+  // (Notify/Edit & Shifts/Archive/Purge), which keep their own click targets.
+  document.querySelectorAll('tr.opp-row').forEach(function (row) {
+    row.addEventListener('click', function (e) {
+      if (e.target.closest('td:last-child')) return;
+      window.location = row.dataset.href;
+    });
+  });
 </script>
 {% endblock %}
