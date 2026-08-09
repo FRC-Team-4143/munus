@@ -103,19 +103,26 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     normal sign-in wall (types their username) instead of the one-tap Slack-push
     bootstrap `/enter` gives you — a deliberate trade for not needing a second,
     ephemeral reply message just to open the page."""
-    lines = [f"✨ *New volunteer opportunity: {opp.name}*"]
-    if opp.is_required:
-        lines.append("🚨 *Required — every active student must sign up for at least 1 shift.*")
-    if opp.description:
-        lines.append(opp.description)
+    info = []
     if opp.location:
-        lines.append(f"📍 {opp.location}")
+        info.append(f"📍 {opp.location}")
     date_range = format_date_range(opp.shifts)
     if date_range:
-        lines.append(f"📅 {date_range}")
+        info.append(f"📅 {date_range}")
     if opp.attire:
-        lines.append(f"👕 {opp.attire}")
-    text = "\n".join(lines)
+        info.append(f"👕 {opp.attire}")
+
+    # Blank lines between groups (title/required flag/description/bullets) so Slack
+    # renders them as separate paragraphs instead of one dense block; single "\n"
+    # within a group keeps its lines (e.g. the info bullets) tight against each other.
+    groups = [f"✨ *New volunteer opportunity: {opp.name}*"]
+    if opp.is_required:
+        groups.append("🚨 *Required — every active student must sign up for at least 1 shift.*")
+    if opp.description:
+        groups.append(opp.description)
+    if info:
+        groups.append("\n".join(info))
+    text = "\n\n".join(groups)
     blocks = [
         {"type": "section", "text": {"type": "mrkdwn", "text": text}},
         {
