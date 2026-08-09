@@ -1,5 +1,6 @@
 {% set status_badge = {"pending": "bg-warning text-dark", "approved": "bg-success", "rejected": "bg-danger"} %}
 {% if submissions %}
+<div class="table-responsive">
 <table class="table table-hover mb-0 align-middle">
   <thead class="table-light">
     <tr><th>Opportunity</th><th>Hours</th><th>Reviewer</th><th>Status</th><th>Submitted</th></tr>
@@ -19,6 +20,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p class="text-muted p-3 mb-0">No submissions yet.</p>
 {% endif %}

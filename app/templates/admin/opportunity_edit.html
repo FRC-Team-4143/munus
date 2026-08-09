@@ -89,6 +89,7 @@
       <div class="card-header"><i class="bi bi-calendar-week me-1"></i> Shifts</div>
       <div class="card-body p-0">
         {% if shifts %}
+        <div class="table-responsive">
         <table class="table table-hover mb-0 align-middle">
           <thead class="table-light"><tr><th>When</th><th>Cap</th><th>Signed Up</th><th>Approver</th><th></th></tr></thead>
           <tbody>
@@ -145,6 +146,7 @@
             {% endfor %}
           </tbody>
         </table>
+        </div>
         {% else %}
         <p class="text-muted p-3 mb-0">No shifts yet — add one above.</p>
         {% endif %}

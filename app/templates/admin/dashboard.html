@@ -46,6 +46,7 @@
   <div class="card-header"><i class="bi bi-hourglass-split me-1"></i> Submissions Awaiting Review</div>
   <div class="card-body p-0">
     {% if pending %}
+    <div class="table-responsive">
     <table class="table table-hover mb-0 align-middle">
       <thead class="table-light">
         <tr><th>Student</th><th>Opportunity</th><th>Hours</th><th>Reviewer</th><th>Submitted</th><th class="text-end">Decision</th></tr>
@@ -73,6 +74,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
     <p class="text-muted p-3 mb-0">No submissions awaiting review. 🎉</p>
     {% endif %}

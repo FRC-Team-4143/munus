@@ -43,6 +43,7 @@
   <div class="card-header"><i class="bi bi-list-check me-1"></i> My Submissions</div>
   <div class="card-body p-0">
     {% if submissions %}
+    <div class="table-responsive">
     <table class="table table-hover mb-0 align-middle">
       <thead class="table-light" style="background:#1a0f0f;">
         <tr><th>Opportunity</th><th>Hours</th><th>Reviewer</th><th>Status</th><th>Submitted</th></tr>
@@ -62,6 +63,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
     <p class="text-muted p-3 mb-0">You haven't submitted any hours yet. <a href="/submit">Submit some</a>.</p>
     {% endif %}

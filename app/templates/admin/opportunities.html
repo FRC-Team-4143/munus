@@ -12,9 +12,9 @@
 {% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
   <h2>Opportunities</h2>
-  <div class="d-flex gap-2">
+  <div class="d-flex gap-2 flex-wrap">
     {% if show_archived %}
     <a href="/admin/opportunities" class="btn btn-outline-secondary btn-sm"><i class="bi bi-eye-slash me-1"></i> Hide Archived</a>
     {% else %}
@@ -34,6 +34,7 @@
 
 <div class="card">
   <div class="card-body p-0">
+    <div class="table-responsive">
     <table class="table table-hover mb-0 align-middle">
       <thead class="table-light"><tr><th>Name</th><th>Location</th><th>Dates</th><th>Shifts</th><th></th></tr></thead>
       <tbody>
@@ -69,6 +70,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </div>
 </div>
 
