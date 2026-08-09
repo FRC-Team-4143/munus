@@ -164,7 +164,12 @@ added to a shift-based opportunity (`admin_shift_create`), or immediately on cre
 for a **continuous** one (`admin_opportunities_create` — it has no shifts to wait for).
 The message (`opportunities.opportunity_announcement_blocks`) carries a **🙋 View & sign
 up** button — a plain Slack *link* button (a `url`, no `action_id`), straight to
-`{BASE_URL}/opportunities/{id}`.
+`{BASE_URL}/opportunities/{id}`. The title renders in its own `header` block (Slack's
+only way to get larger text — mrkdwn `section` text has no font-size control), which
+means it's `plain_text` only and capped at 150 chars; `opportunity_announcement_blocks`
+truncates with `…` if `opp.name` pushes it over. The required flag, description, and
+info bullets (location/date/attire) live in a separate `section` block below it, each
+its own paragraph (blank `\n\n` line) so they don't read as one dense block.
 
 Being a link button, it never touches our server — Slack opens the URL directly, a
 genuine one-tap click for anyone with a live Legion session. The tradeoff: a shared

@@ -28,13 +28,25 @@ def test_announcement_flags_required_opportunity():
     opp = Opportunity(id=1, name="Bag Night", is_required=True)
     text, blocks = opportunity_announcement_blocks(opp)
     assert "Required" in text
-    assert blocks[0]["text"]["text"] == text  # flag lives in the same section block
+    assert blocks[0]["type"] == "header"  # title gets its own larger header block
+    assert blocks[1]["text"]["text"] == "🚨 *Required — every active student must sign up for at least 1 shift.*"
 
 
 def test_announcement_omits_required_flag_when_not_required():
     opp = Opportunity(id=1, name="Food Drive", is_required=False)
     text, _ = opportunity_announcement_blocks(opp)
     assert "Required" not in text
+
+
+def test_announcement_header_truncates_long_names():
+    """Slack's `header` block is plain_text and capped at 150 characters — a long
+    opportunity name plus the "New volunteer opportunity:" prefix can exceed that."""
+    opp = Opportunity(id=1, name="X" * 200)
+    _, blocks = opportunity_announcement_blocks(opp)
+    header_text = blocks[0]["text"]["text"]
+    assert blocks[0]["type"] == "header"
+    assert len(header_text) == 150
+    assert header_text.endswith("…")
 
 
 def test_announcement_includes_shift_date_range():

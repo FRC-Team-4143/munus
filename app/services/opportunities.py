@@ -112,19 +112,31 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     if opp.attire:
         info.append(f"👕 {opp.attire}")
 
-    # Blank lines between groups (title/required flag/description/bullets) so Slack
-    # renders them as separate paragraphs instead of one dense block; single "\n"
-    # within a group keeps its lines (e.g. the info bullets) tight against each other.
-    groups = [f"✨ *New volunteer opportunity: {opp.name}*"]
+    # The title gets its own `header` block — Slack renders it noticeably larger/bolder
+    # than section text, which a mrkdwn size trick can't do. `header` is plain_text only
+    # (no `*bold*` markup, capped at 150 chars) so it's built and truncated separately
+    # from the mrkdwn groups below.
+    title = f"✨ New volunteer opportunity: {opp.name}"
+    if len(title) > 150:
+        title = title[:149] + "…"
+
+    # Blank lines between groups (required flag/description/bullets) so Slack renders
+    # them as separate paragraphs instead of one dense block; single "\n" within a
+    # group keeps its lines (e.g. the info bullets) tight against each other.
+    groups = []
     if opp.is_required:
         groups.append("🚨 *Required — every active student must sign up for at least 1 shift.*")
     if opp.description:
         groups.append(opp.description)
     if info:
         groups.append("\n".join(info))
-    text = "\n\n".join(groups)
-    blocks = [
-        {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+    body = "\n\n".join(groups)
+    text = f"{title}\n\n{body}" if body else title
+
+    blocks = [{"type": "header", "text": {"type": "plain_text", "text": title, "emoji": True}}]
+    if body:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": body}})
+    blocks.append(
         {
             "type": "actions",
             "elements": [
@@ -134,8 +146,8 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
                     "url": f"{settings.base_url}/opportunities/{opp.id}",
                 }
             ],
-        },
-    ]
+        }
+    )
     return text, blocks
 
 
