@@ -16,6 +16,7 @@ from app.models import (
     HourSubmission, Mentor, Opportunity, Shift, Signup, SignupStatus, Student,
     SubmissionStatus,
 )
+from app.services.requirements import resolve_required_hours, season_total_hours
 from app.services.slack_client import send_dm
 from app.utils import format_shift_range, shift_length_hours, utc_to_local
 
@@ -391,3 +392,27 @@ async def notify_student_of_review(submission_id: int) -> None:
         else:
             return
         await send_dm(submission.student.slack_user_id, text)
+
+        if submission.status == SubmissionStatus.approved:
+            await _notify_if_requirement_just_reached(db, submission)
+
+
+async def _notify_if_requirement_just_reached(db: AsyncSession, submission: HourSubmission) -> None:
+    """DM the student once — the moment an approval pushes their season total at or
+    over their level's required hours. Compares the total with and without this
+    submission's hours, so it only fires on the submission that crosses the line, not
+    on every approval after they've already met it."""
+    student = submission.student
+    required = await resolve_required_hours(db, student.level)
+    if required <= 0:
+        return
+    total_after = await season_total_hours(db, student.id)
+    total_before = total_after - submission.hours
+    if total_before >= required or total_after < required:
+        return
+    await send_dm(
+        student.slack_user_id,
+        f"🎉 *Requirement Met!*\n"
+        f"You've reached your season requirement of {required:.2f} hrs "
+        f"(total logged: {total_after:.2f} hrs). Great work!",
+    )
