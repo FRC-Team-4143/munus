@@ -141,7 +141,7 @@
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title" id="studentSubsModalLabel">Submissions</h5>
+        <h5 class="modal-title" id="studentSubsModalLabel">Activity</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
@@ -162,7 +162,7 @@
       var btn = event.relatedTarget;
       var id = btn.dataset.studentId;
       var name = btn.dataset.studentName;
-      titleEl.textContent = name + ' — Submissions';
+      titleEl.textContent = name + ' — Activity';
       bodyEl.innerHTML = LOADING_HTML;
       fetch('/admin/students/' + id + '/submissions')
         .then(function (r) {
@@ -171,12 +171,12 @@
         })
         .then(function (html) { bodyEl.innerHTML = html; })
         .catch(function () {
-          bodyEl.innerHTML = '<div class="alert alert-danger mb-0">Couldn\'t load submissions. Try again.</div>';
+          bodyEl.innerHTML = '<div class="alert alert-danger mb-0">Couldn\'t load activity. Try again.</div>';
         });
     });
 
     modalEl.addEventListener('hidden.bs.modal', function () {
-      titleEl.textContent = 'Submissions';
+      titleEl.textContent = 'Activity';
       bodyEl.innerHTML = LOADING_HTML;
     });
   })();

@@ -25,7 +25,9 @@ from app.models import (
 )
 from app.services import audit, submissions as submission_service
 from app.services.app_settings import get_season_start, season_start_utc, set_season_start
-from app.services.opportunities import announce_opportunity, update_announcement
+from app.services.opportunities import (
+    announce_opportunity, update_announcement, upcoming_signups_for_student,
+)
 from app.services.reports import student_progress_report, student_vhours_message
 from app.services.requirements import (
     level_requirements_map, resolve_required_hours, season_required_opportunities,
@@ -1178,10 +1180,11 @@ async def admin_report(
 
 @router.get("/students/{student_id}/submissions", response_class=HTMLResponse)
 async def admin_student_submissions(student_id: int, request: Request, db: AsyncSession = Depends(get_db)):
-    """HTML fragment of a single student's full submission history, for the Report
-    screen's name-click modal. Fetched via JS, not navigated to directly — a 404 here
-    (rather than the RedirectResponse other admin "not found" routes use) renders as an
-    error fragment in the modal instead of silently swapping in an unrelated page."""
+    """HTML fragment of a single student's full submission history plus their still-open
+    signups (signed up, shift not yet ended), for the Report screen's name-click modal.
+    Fetched via JS, not navigated to directly — a 404 here (rather than the
+    RedirectResponse other admin "not found" routes use) renders as an error fragment in
+    the modal instead of silently swapping in an unrelated page."""
     if redirect := _require_auth(request):
         return redirect
     student = (await db.execute(select(Student).where(Student.id == student_id))).scalars().first()
@@ -1195,9 +1198,10 @@ async def admin_student_submissions(student_id: int, request: Request, db: Async
             .order_by(HourSubmission.submitted_at.desc())
         )
     ).scalars().all()
+    upcoming = await upcoming_signups_for_student(db, student.id)
     return templates.TemplateResponse(
         "admin/_student_submissions_fragment.html",
-        {"request": request, "student": student, "submissions": subs},
+        {"request": request, "student": student, "submissions": subs, "upcoming_signups": upcoming},
     )
 
 

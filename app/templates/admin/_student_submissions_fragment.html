@@ -1,4 +1,5 @@
 {% set status_badge = {"pending": "bg-warning text-dark", "approved": "bg-success", "rejected": "bg-danger"} %}
+<h6 class="text-muted text-uppercase small mb-2">Submitted</h6>
 {% if submissions %}
 <div class="table-responsive">
 <table class="table table-hover mb-0 align-middle">
@@ -22,5 +23,26 @@
 </table>
 </div>
 {% else %}
-<p class="text-muted p-3 mb-0">No submissions yet.</p>
+<p class="text-muted mb-0">No submissions yet.</p>
+{% endif %}
+
+<h6 class="text-muted text-uppercase small mb-2 mt-4">Signed Up · Not Yet Completed</h6>
+{% if upcoming_signups %}
+<div class="table-responsive">
+<table class="table table-hover mb-0 align-middle">
+  <thead class="table-light">
+    <tr><th>Opportunity</th><th>Shift</th></tr>
+  </thead>
+  <tbody>
+    {% for su in upcoming_signups %}
+    <tr>
+      <td>{{ su.shift.opportunity.name if su.shift.opportunity else '—' }}</td>
+      <td class="text-muted small">{{ su.shift.start_time | shiftrange(su.shift.end_time) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="text-muted mb-0">No open signups.</p>
 {% endif %}
