@@ -1,7 +1,9 @@
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.models import Opportunity, Shift, Signup, SignupStatus, SubmissionStatus
+import app.database as database_module
+import app.services.submissions as subs
+from app.models import Opportunity, Shift, Signup, SignupStatus, StudentLevel, SubmissionStatus
 from app.services.requirements import season_total_hours
 from app.services.submissions import (
     create_submission, resolve_reviewer_id, set_status, submit_opportunity_hours,
@@ -161,6 +163,76 @@ async def test_submit_opportunity_hours_counts_toward_season_total(
     sub = await submit_opportunity_hours(db, student.id, opp, 4.0, None)
     await set_status(db, sub.id, SubmissionStatus.approved)
     assert await season_total_hours(db, student.id) == 4.0
+
+
+async def test_requirement_met_notification_fires_once_when_crossed(
+    db, session_factory, make_student, make_mentor, monkeypatch
+):
+    """The student's default level (4143 Student) requires 15 hrs. The DM should fire
+    on the exact submission that crosses the line, not before and not again after."""
+    monkeypatch.setattr(database_module, "AsyncSessionLocal", session_factory)
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None, automated=False):
+        calls.append(text)
+
+    monkeypatch.setattr(subs, "send_dm", fake_send_dm)
+
+    student = await make_student(slack="U0STU", level=StudentLevel.team_4143)
+    mentor = await make_mentor()
+
+    # 10 hrs approved — below the 15 hr requirement, no "requirement met" DM.
+    first = await create_submission(
+        db, student_id=student.id, opportunity_id=None, shift_id=None,
+        hours=10.0, report=None, reviewer_mentor_id=mentor.id,
+    )
+    await set_status(db, first.id, SubmissionStatus.approved)
+    await subs.notify_student_of_review(first.id)
+    assert not any("Requirement Met" in t for t in calls)
+
+    # 6 more hrs pushes the total to 16 — crosses the 15 hr line, DM fires.
+    second = await create_submission(
+        db, student_id=student.id, opportunity_id=None, shift_id=None,
+        hours=6.0, report=None, reviewer_mentor_id=mentor.id,
+    )
+    await set_status(db, second.id, SubmissionStatus.approved)
+    await subs.notify_student_of_review(second.id)
+    met_calls = [t for t in calls if "Requirement Met" in t]
+    assert len(met_calls) == 1
+    assert "16.00 hrs" in met_calls[0]
+
+    # A later approval, already past the requirement, does not notify again.
+    third = await create_submission(
+        db, student_id=student.id, opportunity_id=None, shift_id=None,
+        hours=1.0, report=None, reviewer_mentor_id=mentor.id,
+    )
+    await set_status(db, third.id, SubmissionStatus.approved)
+    await subs.notify_student_of_review(third.id)
+    assert len([t for t in calls if "Requirement Met" in t]) == 1
+
+
+async def test_no_level_never_gets_requirement_notification(
+    db, session_factory, make_student, make_mentor, monkeypatch
+):
+    """Alumni/no-grade students have no season requirement (see derive_level) — the
+    "requirement met" DM must never fire for them, no matter how many hours they log."""
+    monkeypatch.setattr(database_module, "AsyncSessionLocal", session_factory)
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None, automated=False):
+        calls.append(text)
+
+    monkeypatch.setattr(subs, "send_dm", fake_send_dm)
+
+    student = await make_student(slack="U0STU", level=None)
+    mentor = await make_mentor()
+    sub = await create_submission(
+        db, student_id=student.id, opportunity_id=None, shift_id=None,
+        hours=50.0, report=None, reviewer_mentor_id=mentor.id,
+    )
+    await set_status(db, sub.id, SubmissionStatus.approved)
+    await subs.notify_student_of_review(sub.id)
+    assert not any("Requirement Met" in t for t in calls)
 
 
 async def test_submit_shift_hours_shift_override_wins(
