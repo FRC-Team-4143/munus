@@ -26,7 +26,6 @@ from app.utils import format_shift_range, now_utc, shift_length_hours
 async def student_progress_report(
     db: AsyncSession,
     level: Optional[StudentLevel] = None,
-    include_archived: bool = False,
 ) -> list[dict]:
     """One dict per student (sorted by name):
       {student, approved, projected, required, remaining, pct, pending_count,
@@ -43,9 +42,7 @@ async def student_progress_report(
     rules that keep a new student from being dinged for a required opportunity that
     predates them.
     """
-    student_q = select(Student).order_by(Student.name)
-    if not include_archived:
-        student_q = student_q.where(Student.is_active.is_(True))
+    student_q = select(Student).where(Student.is_active.is_(True)).order_by(Student.name)
     if level is not None:
         student_q = student_q.where(Student.level == level)
     students = (await db.execute(student_q)).scalars().all()

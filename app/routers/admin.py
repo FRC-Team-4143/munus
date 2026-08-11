@@ -1171,15 +1171,12 @@ def _parse_level(level: Optional[str]) -> Optional[StudentLevel]:
 async def admin_report(
     request: Request,
     level: Optional[str] = None,
-    show_archived: int = 0,
     db: AsyncSession = Depends(get_db),
 ):
     if redirect := _require_auth(request):
         return redirect
     level_filter = _parse_level(level)
-    rows = await student_progress_report(
-        db, level=level_filter, include_archived=bool(show_archived)
-    )
+    rows = await student_progress_report(db, level=level_filter)
     met = sum(1 for r in rows if r["met"])
     required_opportunity_names = [
         o.name for o in await season_required_opportunities(db, await season_start_utc(db))
@@ -1191,7 +1188,6 @@ async def admin_report(
             "rows": rows,
             "levels": list(StudentLevel),
             "current_level": level_filter.value if level_filter else "",
-            "show_archived": bool(show_archived),
             "met_count": met,
             "required_opportunity_names": required_opportunity_names,
         },
@@ -1229,7 +1225,6 @@ async def admin_student_submissions(student_id: int, request: Request, db: Async
 async def admin_report_notify(
     request: Request,
     level: Optional[str] = None,
-    show_archived: int = 0,
     db: AsyncSession = Depends(get_db),
 ):
     """DM every active, Slack-linked student the same summary `/vhours` shows them."""
@@ -1258,8 +1253,6 @@ async def admin_report_notify(
     qs = f"notified={sent}"
     if level:
         qs += f"&level={level}"
-    if show_archived:
-        qs += "&show_archived=1"
     return RedirectResponse(f"/admin/report?{qs}", status_code=303)
 
 
@@ -1267,15 +1260,12 @@ async def admin_report_notify(
 async def admin_report_export(
     request: Request,
     level: Optional[str] = None,
-    show_archived: int = 0,
     db: AsyncSession = Depends(get_db),
 ):
     if redirect := _require_auth(request):
         return redirect
 
-    rows = await student_progress_report(
-        db, level=_parse_level(level), include_archived=bool(show_archived)
-    )
+    rows = await student_progress_report(db, level=_parse_level(level))
 
     output = io.StringIO()
     writer = csv.writer(output)

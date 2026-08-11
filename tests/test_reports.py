@@ -55,7 +55,7 @@ async def test_report_sticky_projected(db, make_student, make_opportunity, make_
     assert r["missing_required"] == []  # no required opportunities configured
 
 
-async def test_report_level_filter_and_archived(db, make_student):
+async def test_report_level_filter_excludes_archived(db, make_student):
     await make_student(name="Fresh", code="frsh0001", level=StudentLevel.freshman)
     await make_student(name="Senior", code="snr00001", level=StudentLevel.team_4143)
     await make_student(name="Gone", code="gone0001", level=StudentLevel.freshman, is_active=False)
@@ -66,9 +66,6 @@ async def test_report_level_filter_and_archived(db, make_student):
 
     fresh_only = await student_progress_report(db, level=StudentLevel.freshman)
     assert {r["student"].name for r in fresh_only} == {"Fresh"}
-
-    with_archived = await student_progress_report(db, include_archived=True)
-    assert "Gone" in {r["student"].name for r in with_archived}
 
 
 async def test_student_vhours_message(db, make_student, make_opportunity, make_shift):
