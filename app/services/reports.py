@@ -227,7 +227,7 @@ def mentor_vhours_message(mentor: Mentor) -> str:
     pattern as `student_vhours_message` — no Legion round trip unless the browser needs one."""
     opportunities_url = f"{settings.base_url}/enter?member={mentor.member_code}&next=/opportunities"
     return (
-        "🙋 `/vhours` shows a student's season progress, so there's nothing to report for "
+        "❌ `/vhours` shows a student's season progress, so there's nothing to report for "
         "a mentor account.\n\n"
         f"<{opportunities_url}|📋 See what students could be doing>"
     )
