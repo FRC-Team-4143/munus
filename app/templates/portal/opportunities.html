@@ -37,7 +37,7 @@
         {% if c.opp.description %}<p class="small mb-3">{{ c.opp.description | truncate(120) }}</p>{% endif %}
         <div class="mt-auto d-flex justify-content-between align-items-center">
           <span class="badge bg-secondary">Ongoing</span>
-          <a href="/opportunities/{{ c.opp.id }}" class="btn btn-sm btn-primary">Log hours</a>
+          <a href="/opportunities/{{ c.opp.id }}" class="btn btn-sm btn-primary">{{ 'Log hours' if student else 'View' }}</a>
         </div>
       </div>
     </div>
@@ -62,7 +62,7 @@
           <span class="badge bg-secondary">
             {{ c.upcoming }} upcoming shift{{ '' if c.upcoming == 1 else 's' }}
           </span>
-          <a href="/opportunities/{{ c.opp.id }}" class="btn btn-sm btn-primary">View &amp; sign up</a>
+          <a href="/opportunities/{{ c.opp.id }}" class="btn btn-sm btn-primary">{{ 'View & sign up' if student else 'View' }}</a>
         </div>
       </div>
     </div>

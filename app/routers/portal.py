@@ -21,7 +21,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.database import get_db
 from app.models import (
-    HourSubmission, Opportunity, Shift, Signup, SignupStatus, Student,
+    HourSubmission, Mentor, Opportunity, Shift, Signup, SignupStatus, Student,
     SubmissionStatus, level_label,
 )
 from app.services import legion_auth, opportunities as opp_service
@@ -60,6 +60,23 @@ async def _current_student(request: Request, db: AsyncSession) -> Optional[Stude
     if student is None or not student.is_active:
         return None
     return student
+
+
+async def _current_mentor(request: Request, db: AsyncSession) -> Optional[Mentor]:
+    """A signed-in mentor, as a read-only viewer of opportunities — signup/log-hours
+    stays student-only. Slack's opportunity announcement (and its "View & sign up"
+    button) posts to the whole team channel, not just students, so without this a
+    mentor who clicks it just hits the student-only sign-in wall (`portal/identify.html`'s
+    `wrong_role` case) instead of seeing what they're being asked to look at."""
+    identity = sso_identity(request)
+    if identity is None or identity.get("role") != "mentor":
+        return None
+    mentor = (
+        await db.execute(select(Mentor).where(Mentor.member_code == identity["member_code"]))
+    ).scalars().first()
+    if mentor is None or not mentor.is_active:
+        return None
+    return mentor
 
 
 def _signin_redirect(next_path: str) -> RedirectResponse:
@@ -172,6 +189,13 @@ async def index(request: Request, db: AsyncSession = Depends(get_db), next: str 
             if identity.get("role") != "student":
                 context["wrong_role"] = True
                 context["signed_in_name"] = identity.get("name") or "that account"
+                # A mentor isn't locked out of Munus entirely — they can still browse
+                # opportunities (see opportunity_detail/opportunities_list) — so only
+                # point at /admin for those who'd actually get past its group gate
+                # (mirrors admin.py's _ADMIN_GROUP/_MANAGER_GROUP), rather than implying
+                # admin access is the only way in.
+                groups = set(identity.get("groups") or [])
+                context["can_admin"] = bool(groups & {"munus-admin", "munus-manager"})
             else:
                 context["not_synced"] = True
         return templates.TemplateResponse("portal/identify.html", context)
@@ -255,7 +279,8 @@ async def logout(request: Request):
 @router.get("/opportunities", response_class=HTMLResponse)
 async def opportunities_list(request: Request, db: AsyncSession = Depends(get_db)):
     student = await _current_student(request, db)
-    if not student:
+    mentor = None if student else await _current_mentor(request, db)
+    if not student and not mentor:
         return _signin_redirect(request.url.path)
 
     opps = (
@@ -287,7 +312,8 @@ async def opportunities_list(request: Request, db: AsyncSession = Depends(get_db
         })
     return templates.TemplateResponse(
         "portal/opportunities.html",
-        {"request": request, "student": student, "cards": cards, "continuous_cards": continuous_cards},
+        {"request": request, "student": student, "mentor": mentor, "cards": cards,
+         "continuous_cards": continuous_cards},
     )
 
 
@@ -296,7 +322,8 @@ async def opportunity_detail(
     opp_id: int, request: Request, db: AsyncSession = Depends(get_db)
 ):
     student = await _current_student(request, db)
-    if not student:
+    mentor = None if student else await _current_mentor(request, db)
+    if not student and not mentor:
         return _signin_redirect(request.url.path)
 
     opp = (
@@ -312,8 +339,8 @@ async def opportunity_detail(
     if opp.is_continuous:
         return templates.TemplateResponse(
             "portal/opportunity.html",
-            {"request": request, "student": student, "opp": opp, "shift_rows": None,
-             "message": request.query_params.get("message")},
+            {"request": request, "student": student, "mentor": mentor, "opp": opp,
+             "shift_rows": None, "message": request.query_params.get("message")},
         )
 
     now = now_utc()
@@ -323,18 +350,21 @@ async def opportunity_detail(
         [s for s in opp.shifts if s.start_time > now or s.end_time > now],
         key=lambda s: s.start_time,
     )
-    # Which of this opportunity's shifts the student is already signed up for.
-    my_signups = {
-        row.shift_id: row
-        for row in (
-            await db.execute(
-                select(Signup).where(
-                    Signup.student_id == student.id,
-                    Signup.status == SignupStatus.signed_up,
+    # Which of this opportunity's shifts the student is already signed up for — a mentor
+    # is a read-only viewer with no signups of their own to look up.
+    my_signups = {}
+    if student:
+        my_signups = {
+            row.shift_id: row
+            for row in (
+                await db.execute(
+                    select(Signup).where(
+                        Signup.student_id == student.id,
+                        Signup.status == SignupStatus.signed_up,
+                    )
                 )
-            )
-        ).scalars().all()
-    }
+            ).scalars().all()
+        }
 
     # Who else is signed up for each shift — helps a student pick a shift their
     # friends are already on. One batched query for every shift on this page.
@@ -367,8 +397,8 @@ async def opportunity_detail(
 
     return templates.TemplateResponse(
         "portal/opportunity.html",
-        {"request": request, "student": student, "opp": opp, "shift_rows": shift_rows,
-         "message": request.query_params.get("message")},
+        {"request": request, "student": student, "mentor": mentor, "opp": opp,
+         "shift_rows": shift_rows, "message": request.query_params.get("message")},
     )
 
 

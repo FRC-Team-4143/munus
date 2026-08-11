@@ -45,6 +45,45 @@ async def test_identify_and_browse(client, make_student, make_mentor, make_oppor
     assert "Season total" in my_hours.text
 
 
+async def test_mentor_can_view_opportunity_without_signup_controls(
+    client, make_mentor, make_opportunity, make_shift
+):
+    """A mentor is a read-only viewer: Slack's opportunity announcement (and its "View
+    & sign up" link) posts to the whole team channel, not just students, so a mentor
+    who clicks it should see the same details/shifts a student sees — minus any
+    signup/cancel/log-hours action, since those stay student-only."""
+    await make_mentor(name="Coach Ray", code="ray00001")
+    opp = await make_opportunity(name="Food Drive", location="Community Center")
+    await make_shift(opp.id, capacity=2)
+
+    client.cookies.set(SSO_COOKIE, make_sso_cookie(role="mentor", member_code="ray00001", groups=()))
+
+    listing = await client.get("/opportunities")
+    assert listing.status_code == 200
+    assert "Food Drive" in listing.text
+    assert "View & sign up" not in listing.text
+
+    detail = await client.get(f"/opportunities/{opp.id}")
+    assert detail.status_code == 200
+    assert "Community Center" in detail.text
+    assert "Sign up" not in detail.text
+    assert "Submit your hours" not in detail.text
+
+
+async def test_mentor_viewing_continuous_opportunity_has_no_log_hours_form(
+    client, make_mentor, make_opportunity
+):
+    await make_mentor(name="Coach Ray", code="ray00001")
+    opp = await make_opportunity(name="Pit Crew", is_continuous=True)
+
+    client.cookies.set(SSO_COOKIE, make_sso_cookie(role="mentor", member_code="ray00001", groups=()))
+
+    detail = await client.get(f"/opportunities/{opp.id}")
+    assert detail.status_code == 200
+    assert "ongoing activity" in detail.text
+    assert "<form" not in detail.text
+
+
 async def test_required_opportunity_shows_badge_in_listing(
     client, make_student, make_opportunity, make_shift
 ):
@@ -284,13 +323,30 @@ async def test_mentor_identity_cannot_reach_portal(client):
 async def test_mentor_visiting_portal_home_sees_wrong_role_message(client):
     """Regression test: a mentor clicking "Sign in with Legion" on the student portal
     used to just silently re-show the same sign-in page, indistinguishable from sign-in
-    having failed outright. It now says who they're signed in as and points at /admin."""
-    client.cookies.set(SSO_COOKIE, make_sso_cookie(role="mentor", name="Coach Ray", groups=()))
+    having failed outright. It now says who they're signed in as and offers a way in
+    that actually works for them — /admin only if their groups would pass its gate
+    (see test_non_admin_mentor_...  below), and always a Browse Opportunities link,
+    since a plain mentor can see opportunities same as an admin/manager one."""
+    client.cookies.set(
+        SSO_COOKIE, make_sso_cookie(role="mentor", name="Coach Ray", groups=("munus-admin",))
+    )
     resp = await client.get("/me")
     assert resp.status_code == 200
     assert "Coach Ray" in resp.text
     assert "students only" in resp.text
     assert 'href="/admin"' in resp.text
+    assert 'href="/opportunities"' in resp.text
+
+
+async def test_non_admin_mentor_wrong_role_message_omits_admin_link(client):
+    """A mentor with no munus-admin/munus-manager group would just hit /admin's own
+    403 page — don't dangle that link in front of them as if it were their way in.
+    They should still be pointed at what they *can* actually reach: opportunities."""
+    client.cookies.set(SSO_COOKIE, make_sso_cookie(role="mentor", name="Coach Ray", groups=()))
+    resp = await client.get("/me")
+    assert resp.status_code == 200
+    assert 'href="/admin"' not in resp.text
+    assert 'href="/opportunities"' in resp.text
 
 
 async def test_signed_out_visitor_sees_plain_signin_prompt(client):

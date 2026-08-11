@@ -32,6 +32,7 @@
     <div class="card">
       <div class="card-header"><i class="bi bi-arrow-repeat me-1"></i> Log Hours</div>
       <div class="card-body">
+        {% if student %}
         <p class="text-muted small">This is an ongoing activity — log hours whenever you put in time, as often as you need to.</p>
         <form method="post" action="/opportunities/{{ opp.id }}/log-hours" class="row g-2">
           <div class="col-md-4">
@@ -44,6 +45,9 @@
           </div>
           <div class="col-12"><button type="submit" class="btn btn-primary btn-sm">Submit</button></div>
         </form>
+        {% else %}
+        <p class="text-muted small mb-0">This is an ongoing activity — students log hours whenever they put in time, as often as they need to.</p>
+        {% endif %}
       </div>
     </div>
     {% else %}
@@ -71,7 +75,9 @@
                 <span class="badge bg-success">{{ r.remaining }} spot{{ '' if r.remaining == 1 else 's' }} left</span>
                 {% endif %}
               </div>
-              {% if r.signed_up %}
+              {% if not student %}
+              {# Mentor viewer: read-only, no signup/cancel actions. #}
+              {% elif r.signed_up %}
               <form method="post" action="/signups/{{ r.signup_id }}/cancel" class="d-inline">
                 <span class="badge bg-success me-2"><i class="bi bi-check-lg"></i> Signed up</span>
                 <button class="btn btn-sm btn-outline-danger">Cancel</button>
@@ -92,7 +98,9 @@
         {% endif %}
       </div>
     </div>
+    {% if student %}
     <p class="text-muted small mt-2">Already volunteered? <a href="/submit">Submit your hours</a>.</p>
+    {% endif %}
     {% endif %}
   </div>
 </div>
