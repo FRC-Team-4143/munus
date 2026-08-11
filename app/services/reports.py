@@ -229,5 +229,5 @@ def mentor_vhours_message(mentor: Mentor) -> str:
     return (
         "❌ `/vhours` shows a student's season progress, so there's nothing to report for "
         "a mentor account.\n\n"
-        f"<{opportunities_url}|📋 See what students could be doing>"
+        f"<{opportunities_url}|📋 See what opportunities are available>"
     )
