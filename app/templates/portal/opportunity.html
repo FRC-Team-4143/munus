@@ -62,7 +62,12 @@
               <div>{{ r.shift.start_time | shiftrange(r.shift.end_time) }} <span class="text-muted">({{ '%.2f' % r.hours }} hrs)</span></div>
               {% if r.shift.notes %}<div class="small text-muted">{{ r.shift.notes }}</div>{% endif %}
               {% if r.roster %}
-              <div class="small text-muted mt-1"><i class="bi bi-people me-1"></i>{{ r.roster | join(', ') }}</div>
+              <div class="mt-2 d-flex flex-wrap align-items-center gap-1">
+                <span class="text-muted small me-1"><i class="bi bi-people"></i></span>
+                {% for name in r.roster %}
+                <span class="badge bg-secondary fw-normal">{{ name }}</span>
+                {% endfor %}
+              </div>
               {% endif %}
             </div>
             <div class="flex-shrink-0 text-end">
