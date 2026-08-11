@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import (
-    HourSubmission, Shift, Signup, SignupStatus, Student, StudentLevel, SubmissionStatus,
+    HourSubmission, Mentor, Shift, Signup, SignupStatus, Student, StudentLevel, SubmissionStatus,
 )
 from app.services.app_settings import season_start_utc
 from app.services.opportunities import upcoming_signups_for_student
@@ -216,3 +216,18 @@ async def student_vhours_message(db: AsyncSession, student: Student) -> str:
     dashboard_url = f"{settings.base_url}/enter?member={student.member_code}"
     reply += f"\n\n<{dashboard_url}|📊 Open my dashboard>"
     return reply
+
+
+def mentor_vhours_message(mentor: Mentor) -> str:
+    """The mrkdwn body of the `/vhours` reply for a mentor. Mentors have no season
+    progress of their own — `/vhours` is student-only — but they're still a read-only
+    viewer of `/opportunities` (see `_current_mentor` in routers/portal.py, added so the
+    opportunity-announcement's "View & sign up" link doesn't dead-end a mentor who clicks
+    it), so point them there instead of just saying "no". Same one-tap `/enter` link
+    pattern as `student_vhours_message` — no Legion round trip unless the browser needs one."""
+    opportunities_url = f"{settings.base_url}/enter?member={mentor.member_code}&next=/opportunities"
+    return (
+        "❌ `/vhours` shows a student's season progress, so there's nothing to report for "
+        "a mentor account.\n\n"
+        f"<{opportunities_url}|📋 See what opportunities are available>"
+    )

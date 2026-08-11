@@ -23,7 +23,7 @@ from app.models import (
     HourSubmission, Mentor, Shift, Signup, SignupStatus, Student, SubmissionStatus,
 )
 from app.services import audit, submissions
-from app.services.reports import student_vhours_message
+from app.services.reports import mentor_vhours_message, student_vhours_message
 from app.services.slack_client import open_modal, send_dm
 from app.utils import shift_length_hours
 
@@ -82,6 +82,19 @@ async def slack_command(
         await db.execute(select(Student).where(Student.slack_user_id == user_id))
     ).scalars().first()
     if not student:
+        mentor = (
+            await db.execute(select(Mentor).where(Mentor.slack_user_id == user_id))
+        ).scalars().first()
+        if mentor:
+            # Not an error for a mentor — just nothing to report. Point them at the
+            # opportunities list (they're a read-only viewer there) instead of a bare
+            # "you can't use this" message.
+            reply = mentor_vhours_message(mentor)
+            return JSONResponse({
+                "response_type": "ephemeral",
+                "text": reply,
+                "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": reply}}],
+            })
         return Response(
             content="❌ Your Slack account isn't linked to a student record. Please ask an admin.",
             media_type="text/plain",

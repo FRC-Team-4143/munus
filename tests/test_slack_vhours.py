@@ -67,6 +67,17 @@ async def test_vhours_unlinked_user(client):
     assert "isn't linked" in resp.text
 
 
+async def test_vhours_for_mentor_links_to_opportunities(client, make_mentor):
+    mentor = await make_mentor(slack="U0MENTOR", code="deadbeef")
+
+    resp = await _post_vhours(client, "U0MENTOR")
+    assert resp.status_code == 200
+    assert "nothing to report" in resp.text
+    # One-tap sign-in link keyed on the mentor's own member_code, pointed at the
+    # opportunities list rather than a student dashboard.
+    assert f"/enter?member={mentor.member_code}&next=/opportunities" in resp.text
+
+
 async def test_vhours_bad_signature_rejected(client):
     body = urlencode({"command": "/vhours", "user_id": "U0STUDENT", "text": ""})
     headers = _signed_headers(body)

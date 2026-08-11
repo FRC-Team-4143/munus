@@ -238,6 +238,10 @@ async def enter(
     "check Slack" pending page; an unrecognized/missing member falls back to Legion's
     normal username-entry sign-in.
 
+    Looks up `member` as a Student first, then a Mentor — the `/vhours` reply to a mentor
+    links here too (pointed at `/opportunities`, where a mentor is a read-only viewer; see
+    `_current_mentor`), so this can't be student-only.
+
     The challenge branch passes an **absolute** `return_to` (mirroring Tempus's `/enter`):
     Legion's `/sso/complete` redirects to `return_to` as-is, and a bare relative path would
     resolve against *Legion's* host on this cookie-less path, not Munus's — so the fresh
@@ -247,18 +251,28 @@ async def enter(
     if sso_identity(request) is not None:
         return RedirectResponse(next_path, status_code=303)
 
-    student = None
+    member_code = None
     if member:
         student = (
             await db.execute(
                 select(Student).where(Student.member_code == member, Student.is_active.is_(True))
             )
         ).scalars().first()
-    if student is None:
+        if student is not None:
+            member_code = student.member_code
+        else:
+            mentor = (
+                await db.execute(
+                    select(Mentor).where(Mentor.member_code == member, Mentor.is_active.is_(True))
+                )
+            ).scalars().first()
+            if mentor is not None:
+                member_code = mentor.member_code
+    if member_code is None:
         return RedirectResponse(make_authorize_url(request, return_to=next_path), status_code=303)
 
     pending_url = await legion_auth.start_challenge(
-        student.member_code, return_to=f"{settings.base_url}{next_path}"
+        member_code, return_to=f"{settings.base_url}{next_path}"
     )
     if pending_url is None:
         return templates.TemplateResponse(
