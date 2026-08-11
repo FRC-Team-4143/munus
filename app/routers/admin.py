@@ -81,7 +81,8 @@ _MANAGER_GROUP = "munus-manager"
 
 
 def _manager_allowed(path: str) -> bool:
-    """The routes a 'manager' may reach: creating/managing opportunities and shifts.
+    """The routes a 'manager' may reach: creating/managing opportunities and shifts,
+    plus read-only visibility into the dashboard and the season report.
 
     Excludes the irreversible `/purge` (which deletes an opportunity *and* every hour
     submission logged against it, dropping those hours from students' season totals) —
@@ -91,9 +92,13 @@ def _manager_allowed(path: str) -> bool:
     if p.endswith("/purge"):
         return False
     return (
-        p == "/admin/opportunities"
+        p == "/admin"
+        or p == "/admin/opportunities"
         or p.startswith("/admin/opportunities/")
         or p.startswith("/admin/shifts/")
+        or p == "/admin/report"
+        or p.startswith("/admin/report/")
+        or p.startswith("/admin/students/")
     )
 
 
@@ -152,6 +157,21 @@ def _require_auth(request: Request):
 # so it reflects live Settings-page edits rather than its value at import time.
 templates.env.globals["session_identity"] = sso_identity
 templates.env.globals["legion_base_url"] = lambda: settings.legion_base_url
+templates.env.globals["manager_allowed"] = _manager_allowed
+
+
+def _manager_locked(request: Request) -> bool:
+    """True when the viewer is a `munus-manager` without full `munus-admin` access —
+    drives the red padlock the sidebar shows next to sections `_manager_allowed`
+    excludes them from."""
+    identity = sso_identity(request)
+    if identity is None:
+        return False
+    groups = set(identity.get("groups") or [])
+    return _MANAGER_GROUP in groups and _ADMIN_GROUP not in groups
+
+
+templates.env.globals["manager_locked"] = _manager_locked
 
 
 # ── Logout ─────────────────────────────────────────────────────────────────────

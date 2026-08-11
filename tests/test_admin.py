@@ -243,10 +243,15 @@ async def test_manager_role_scoped_to_opportunities(client):
     ar = await client.post(f"/admin/opportunities/{oid}/archive", follow_redirects=False)
     assert ar.status_code == 303
 
-    # Blocked from every admin-only section — stays in the admin shell with a
+    # Can also view the dashboard and season report — read-only visibility, not
+    # full admin.
+    assert (await client.get("/admin")).status_code == 200
+    assert (await client.get("/admin/report")).status_code == 200
+
+    # Blocked from every other admin-only section — stays in the admin shell with a
     # blur-blocked "No Access" page rather than being silently redirected away
     # (regression test: it used to 303 to Opportunities with no explanation).
-    for path in ("/admin", "/admin/roster", "/admin/submissions", "/admin/settings", "/admin/backup", "/admin/report"):
+    for path in ("/admin/roster", "/admin/submissions", "/admin/settings", "/admin/backup"):
         resp = await client.get(path, follow_redirects=False)
         assert resp.status_code == 403, path
         assert "No Access" in resp.text, path
@@ -335,12 +340,12 @@ async def test_admin_student_submissions_forbidden_without_group(client, make_st
     assert resp.status_code == 403
 
 
-async def test_admin_student_submissions_forbidden_for_manager(client, make_student):
-    # Managers may reach /admin/opportunities* and /admin/shifts/* only — not this route.
+async def test_admin_student_submissions_allowed_for_manager(client, make_student):
+    # Part of the Report screen's name-click modal, which managers can now reach.
     student = await make_student()
     await _login(client, groups=("munus-manager",))
     resp = await client.get(f"/admin/students/{student.id}/submissions")
-    assert resp.status_code == 403
+    assert resp.status_code == 200
 
 
 async def test_admin_student_submissions_scoped_to_student(client, db, make_student, make_opportunity):
