@@ -216,9 +216,10 @@ async def student_vhours_message(db: AsyncSession, student: Student) -> str:
         available = await available_opportunities_for_student(db, student.id, limit=3)
         if available:
             reply += "\n\n*Opportunities you could sign up for:*"
-            for opp in available:
+            for entry in available:
+                opp = entry["opp"]
                 opp_url = f"{settings.base_url}/enter?member={student.member_code}&next=/opportunities/{opp.id}"
-                reply += f"\n• <{opp_url}|{opp.name}>"
+                reply += f"\n• <{opp_url}|{opp.name}> — {entry['date_range']}"
 
     # A plain mrkdwn hyperlink (not an interactive button) so it just opens the URL. No
     # Legion round trip happens here — /enter (services/legion_auth.py) only starts a

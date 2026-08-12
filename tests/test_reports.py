@@ -109,6 +109,7 @@ async def test_student_vhours_message_lists_available_opportunities_when_short(
     available_section = msg.split("Opportunities you could sign up for:")[1]
     assert "Robotics Demo" in available_section
     assert "Shop Cleanup" in available_section
+    assert "Ongoing" in available_section  # continuous opportunity has no shift date
     assert "Already Signed Up" not in available_section  # already signed up -> not renudged
     assert f"/enter?member={student.member_code}&next=/opportunities/{open_opp.id}" in msg
 
