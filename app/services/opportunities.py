@@ -32,6 +32,49 @@ async def upcoming_signups_for_student(db: AsyncSession, student_id: int) -> lis
     ).scalars().all()
 
 
+async def available_opportunities_for_student(
+    db: AsyncSession, student_id: int, limit: int = 3
+) -> list[Opportunity]:
+    """A few active opportunities the student could sign up for next: not already
+    signed up for, and either continuous (always open) or with at least one shift that
+    hasn't ended yet. Soonest upcoming shift first, continuous opportunities last (they
+    have no date to sort by). Used to nudge a student who's still short of their season
+    requirement even after their upcoming shifts (`reports.student_vhours_message`)."""
+    opps = (
+        await db.execute(
+            select(Opportunity)
+            .options(selectinload(Opportunity.shifts))
+            .where(Opportunity.is_active.is_(True))
+        )
+    ).scalars().all()
+
+    signed_up_opp_ids = {
+        oid
+        for (oid,) in (
+            await db.execute(
+                select(Shift.opportunity_id)
+                .join(Signup, Signup.shift_id == Shift.id)
+                .where(Signup.student_id == student_id, Signup.status == SignupStatus.signed_up)
+            )
+        ).all()
+    }
+
+    now = now_utc()
+    candidates: list[tuple[Optional[datetime], Opportunity]] = []
+    for opp in opps:
+        if opp.id in signed_up_opp_ids:
+            continue
+        if opp.is_continuous:
+            candidates.append((None, opp))
+            continue
+        upcoming = [s for s in opp.shifts if s.start_time > now or s.end_time > now]
+        if upcoming:
+            candidates.append((min(s.start_time for s in upcoming), opp))
+
+    candidates.sort(key=lambda pair: (pair[0] is None, pair[0] or now))
+    return [opp for _, opp in candidates[:limit]]
+
+
 async def active_signup_count(db: AsyncSession, shift_id: int) -> int:
     """Number of students currently signed up (not cancelled) for a shift."""
     result = await db.execute(

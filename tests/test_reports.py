@@ -85,6 +85,47 @@ async def test_student_vhours_message(db, make_student, make_opportunity, make_s
     assert f"/enter?member={student.member_code}" in msg  # one-tap dashboard link
 
 
+async def test_student_vhours_message_lists_available_opportunities_when_short(
+    db, make_student, make_opportunity, make_shift
+):
+    """Still short of the season requirement even after upcoming shifts -> nudge with a
+    few opportunities the student hasn't signed up for yet, each linking through /enter."""
+    from app.models import Signup, SignupStatus
+    from app.services.reports import student_vhours_message
+
+    student = await make_student(name="Ada", code="vh000002", level=StudentLevel.team_4143)  # req 15
+    signed_up_opp = await make_opportunity(name="Already Signed Up")
+    signed_up_shift = await make_shift(signed_up_opp.id, start_in_hours=24, length_hours=1)
+    db.add(Signup(shift_id=signed_up_shift.id, student_id=student.id, status=SignupStatus.signed_up))
+
+    open_opp = await make_opportunity(name="Robotics Demo")
+    await make_shift(open_opp.id, start_in_hours=48, length_hours=2)
+
+    continuous_opp = await make_opportunity(name="Shop Cleanup", is_continuous=True)
+    await db.commit()
+
+    msg = await student_vhours_message(db, student)
+    assert "Opportunities you could sign up for:" in msg
+    available_section = msg.split("Opportunities you could sign up for:")[1]
+    assert "Robotics Demo" in available_section
+    assert "Shop Cleanup" in available_section
+    assert "Already Signed Up" not in available_section  # already signed up -> not renudged
+    assert f"/enter?member={student.member_code}&next=/opportunities/{open_opp.id}" in msg
+
+
+async def test_student_vhours_message_omits_available_opportunities_when_met(
+    db, make_student
+):
+    from app.services.reports import student_vhours_message
+
+    student = await make_student(name="Ada", code="vh000003", level=StudentLevel.freshman)  # req 5
+    db.add(HourSubmission(student_id=student.id, hours=6.0, status=SubmissionStatus.approved))
+    await db.commit()
+
+    msg = await student_vhours_message(db, student)
+    assert "Opportunities you could sign up for:" not in msg
+
+
 async def test_report_met_when_requirement_reached(db, make_student):
     student = await make_student(level=StudentLevel.freshman)  # required 5
     db.add(HourSubmission(student_id=student.id, hours=6.0, status=SubmissionStatus.approved))

@@ -15,7 +15,7 @@ from app.models import (
     HourSubmission, Mentor, Shift, Signup, SignupStatus, Student, StudentLevel, SubmissionStatus,
 )
 from app.services.app_settings import season_start_utc
-from app.services.opportunities import upcoming_signups_for_student
+from app.services.opportunities import available_opportunities_for_student, upcoming_signups_for_student
 from app.services.requirements import (
     level_requirements_map, resolve_required_hours, season_required_opportunities,
     season_total_hours,
@@ -209,6 +209,16 @@ async def student_vhours_message(db: AsyncSession, student: Student) -> str:
         for su in upcoming:
             opp = su.shift.opportunity.name if su.shift.opportunity else "Volunteer shift"
             reply += f"\n• {opp} — {format_shift_range(su.shift.start_time, su.shift.end_time)}"
+
+    # Still short even counting upcoming shifts — point them at a few more opportunities
+    # they could sign up for, so the DM doubles as a nudge rather than just a status check.
+    if projected < required:
+        available = await available_opportunities_for_student(db, student.id, limit=3)
+        if available:
+            reply += "\n\n*Opportunities you could sign up for:*"
+            for opp in available:
+                opp_url = f"{settings.base_url}/enter?member={student.member_code}&next=/opportunities/{opp.id}"
+                reply += f"\n• <{opp_url}|{opp.name}>"
 
     # A plain mrkdwn hyperlink (not an interactive button) so it just opens the URL. No
     # Legion round trip happens here — /enter (services/legion_auth.py) only starts a
