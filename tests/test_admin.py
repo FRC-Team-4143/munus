@@ -318,6 +318,36 @@ async def test_report_notify_dms_slack_linked_students(
     assert "Beach Cleanup" in calls[0][1]
 
 
+async def test_report_notify_incomplete_only_dms_students_behind(
+    client, db, monkeypatch, make_student
+):
+    import app.routers.admin as adminmod
+    from app.models import HourSubmission, StudentLevel, SubmissionStatus
+
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None):
+        calls.append(uid)
+        return "ts"
+
+    monkeypatch.setattr(adminmod, "send_dm", fake_send_dm)
+
+    await _login(client)
+    on_track = await make_student(
+        name="OnTrack", code="ot000001", slack="U0MET", level=StudentLevel.freshman  # req 5
+    )
+    db.add(HourSubmission(student_id=on_track.id, hours=6.0, status=SubmissionStatus.approved))
+    await make_student(
+        name="Behind", code="bh000001", slack="U0BEHIND", level=StudentLevel.freshman
+    )
+    await db.commit()
+
+    resp = await client.post("/admin/report/notify?incomplete=1", follow_redirects=False)
+    assert resp.status_code == 303
+    assert "notified=1" in resp.headers["location"]
+    assert calls == ["U0BEHIND"]
+
+
 async def test_admin_report_export_csv(client):
     await _login(client)
     resp = await client.get("/admin/report/export")

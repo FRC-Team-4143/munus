@@ -1225,18 +1225,21 @@ async def admin_student_submissions(student_id: int, request: Request, db: Async
 async def admin_report_notify(
     request: Request,
     level: Optional[str] = None,
+    incomplete: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
-    """DM every active, Slack-linked student the same summary `/vhours` shows them."""
+    """DM Slack-linked students the same summary `/vhours` shows them — every active
+    student matching the report's level filter, or (when `incomplete` is set, the
+    Report screen's "Notify students behind" button) only those who haven't yet met
+    their season requirement."""
     if redirect := _require_auth(request):
         return redirect
-    students = (
-        await db.execute(
-            select(Student).where(
-                Student.is_active.is_(True), Student.slack_user_id.is_not(None)
-            )
-        )
-    ).scalars().all()
+    level_filter = _parse_level(level)
+    rows = await student_progress_report(db, level=level_filter)
+    students = [
+        r["student"] for r in rows
+        if r["student"].slack_user_id and (not incomplete or not r["met"])
+    ]
 
     sent = 0
     for student in students:
@@ -1244,11 +1247,10 @@ async def admin_report_notify(
         await send_dm(student.slack_user_id, text)
         sent += 1
 
-    await audit.record(
-        db, request, "report.notify",
-        f"DMed {sent} student(s) their volunteer-hours summary",
-        entity_type="report",
-    )
+    summary = f"DMed {sent} student(s) their volunteer-hours summary"
+    if incomplete:
+        summary += " (not yet meeting their requirement)"
+    await audit.record(db, request, "report.notify", summary, entity_type="report")
     await db.commit()
     qs = f"notified={sent}"
     if level:
