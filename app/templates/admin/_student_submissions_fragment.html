@@ -9,7 +9,7 @@
   <tbody>
     {% for s in submissions %}
     <tr>
-      <td>{{ s.opportunity.name if s.opportunity else '—' }}</td>
+      <td>{% if s.opportunity %}<a href="/admin/opportunities/{{ s.opportunity.id }}/edit">{{ s.opportunity.name }}</a>{% else %}—{% endif %}</td>
       <td>{{ '%.2f' % s.hours }}</td>
       <td>{{ s.reviewer.name if s.reviewer else '—' }}</td>
       <td>
@@ -36,7 +36,7 @@
   <tbody>
     {% for su in upcoming_signups %}
     <tr>
-      <td>{{ su.shift.opportunity.name if su.shift.opportunity else '—' }}</td>
+      <td>{% if su.shift.opportunity %}<a href="/admin/opportunities/{{ su.shift.opportunity.id }}/edit">{{ su.shift.opportunity.name }}</a>{% else %}—{% endif %}</td>
       <td class="text-muted small">{{ su.shift.start_time | shiftrange(su.shift.end_time) }}</td>
     </tr>
     {% endfor %}
