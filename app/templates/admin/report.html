@@ -31,6 +31,14 @@
           onsubmit="return confirm('DM every student with a linked Slack their volunteer-hours summary?')">
       <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-bell me-1"></i>Notify students</button>
     </form>
+    {% if rows %}
+    <form method="post" action="/admin/report/notify?{{ (qs ~ '&incomplete=1')[1:] }}"
+          onsubmit="return confirm('DM students who haven\'t yet met their season requirement their volunteer-hours summary?')">
+      <button type="submit" class="btn btn-sm btn-outline-warning">
+        <i class="bi bi-bell-fill me-1"></i>Notify students behind ({{ rows|length - met_count }})
+      </button>
+    </form>
+    {% endif %}
     <a href="/admin/report/export?{{ qs[1:] }}" class="btn btn-sm btn-outline-primary">
       <i class="bi bi-download me-1"></i>Export CSV
     </a>
