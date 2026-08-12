@@ -70,6 +70,19 @@ async def test_mentor_can_view_opportunity_without_signup_controls(
     assert "Submit your hours" not in detail.text
 
 
+async def test_mentor_nav_has_no_home_link(client, make_mentor):
+    """A mentor has no dashboard (`/me` is student-only) — clicking "Home" used to dead-end
+    on the sign-in screen. The nav should omit it and point the brand logo at Opportunities,
+    the mentor's actual landing page, instead."""
+    await make_mentor(name="Coach Ray", code="ray00001")
+    client.cookies.set(SSO_COOKIE, make_sso_cookie(role="mentor", member_code="ray00001", groups=()))
+
+    resp = await client.get("/opportunities")
+    assert resp.status_code == 200
+    assert ">Home</a>" not in resp.text
+    assert 'class="navbar-brand" href="/opportunities"' in resp.text
+
+
 async def test_mentor_viewing_continuous_opportunity_has_no_log_hours_form(
     client, make_mentor, make_opportunity
 ):
