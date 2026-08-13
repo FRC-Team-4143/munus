@@ -1,0 +1,103 @@
+{% extends "admin/base.html" %}
+{% set active_page = "report" %}
+{% block title %}Archived Student Lookup — Munus Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <h2 class="mb-0">Archived Student Lookup</h2>
+  <a href="/admin/report" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left me-1"></i>Back to Report
+  </a>
+</div>
+
+<p class="text-muted">
+  Archived students no longer appear in the season report or any dropdown — search by
+  name here to look up their submission history.
+</p>
+
+<form method="get" class="row g-2 mb-4 align-items-end">
+  <div class="col-auto" style="min-width: 260px;">
+    <label class="form-label small mb-1">Name</label>
+    <input type="text" name="q" class="form-control form-control-sm" value="{{ q }}"
+           placeholder="Type at least 2 characters" autofocus>
+  </div>
+  <div class="col-auto">
+    <button type="submit" class="btn btn-sm btn-primary">Search</button>
+  </div>
+</form>
+
+{% if q and q|length < 2 %}
+<div class="alert alert-secondary">Type at least 2 characters to search.</div>
+{% elif q and not students %}
+<div class="alert alert-secondary">No archived student matches "{{ q }}".</div>
+{% elif students %}
+<div class="card">
+  <div class="card-body p-0">
+    <table class="table table-sm table-hover mb-0">
+      <thead class="table-dark">
+        <tr><th>Name</th><th>Level</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for s in students %}
+        <tr>
+          <td>{{ s.name }} <span class="badge bg-secondary ms-1">Archived</span></td>
+          <td class="text-muted">{{ s.level | levellabel }}</td>
+          <td class="text-end">
+            <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal"
+                    data-bs-target="#studentSubsModal" data-student-id="{{ s.id }}" data-student-name="{{ s.name }}">
+              View
+            </button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="modal fade" id="studentSubsModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="studentSubsModalLabel">Activity</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="text-muted text-center py-4"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  (function () {
+    var LOADING_HTML = '<div class="text-muted text-center py-4"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>';
+    var modalEl = document.getElementById('studentSubsModal');
+    var titleEl = document.getElementById('studentSubsModalLabel');
+    var bodyEl = modalEl.querySelector('.modal-body');
+
+    modalEl.addEventListener('show.bs.modal', function (event) {
+      var btn = event.relatedTarget;
+      var id = btn.dataset.studentId;
+      var name = btn.dataset.studentName;
+      titleEl.textContent = name + ' — Activity';
+      bodyEl.innerHTML = LOADING_HTML;
+      fetch('/admin/students/' + id + '/submissions')
+        .then(function (r) {
+          if (!r.ok) { throw new Error('request failed'); }
+          return r.text();
+        })
+        .then(function (html) { bodyEl.innerHTML = html; })
+        .catch(function () {
+          bodyEl.innerHTML = '<div class="alert alert-danger mb-0">Couldn\'t load activity. Try again.</div>';
+        });
+    });
+
+    modalEl.addEventListener('hidden.bs.modal', function () {
+      titleEl.textContent = 'Activity';
+      bodyEl.innerHTML = LOADING_HTML;
+    });
+  })();
+</script>
+{% endblock %}

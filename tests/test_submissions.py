@@ -165,6 +165,31 @@ async def test_submit_opportunity_hours_counts_toward_season_total(
     assert await season_total_hours(db, student.id) == 4.0
 
 
+async def test_notify_reviewer_skips_archived_mentor(
+    db, session_factory, make_student, make_mentor, monkeypatch
+):
+    """notify_reviewer must not DM a submission's reviewer once that mentor has been
+    archived — an archived mentor is no longer a valid reviewer anywhere in the app."""
+    monkeypatch.setattr(database_module, "AsyncSessionLocal", session_factory)
+    calls = []
+
+    async def fake_send_dm(*a, **k):
+        calls.append(a)
+
+    monkeypatch.setattr(subs, "send_dm", fake_send_dm)
+
+    student = await make_student()
+    mentor = await make_mentor(slack="U0REV", is_active=False)
+    sub = await create_submission(
+        db, student_id=student.id, opportunity_id=None, shift_id=None,
+        hours=2.0, report=None, reviewer_mentor_id=mentor.id,
+    )
+
+    await subs.notify_reviewer(sub.id)
+
+    assert calls == []
+
+
 async def test_requirement_met_notification_fires_once_when_crossed(
     db, session_factory, make_student, make_mentor, monkeypatch
 ):

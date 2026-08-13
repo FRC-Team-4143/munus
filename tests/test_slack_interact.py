@@ -299,6 +299,30 @@ async def test_submission_approve_works_for_reviewer(
     assert sub.status == SubmissionStatus.approved
 
 
+async def test_submission_approve_blocked_for_archived_mentor(
+    client, db, hush_slack, make_student, make_mentor, make_opportunity, make_shift
+):
+    """An archived mentor must not be able to approve/reject via Slack, even though
+    they're still the submission's on-record reviewer — matches the non-mentor case,
+    since an archived mentor is no longer a valid reviewer anywhere in the app."""
+    mentor, _student, sub = await _make_submission(
+        db, make_student, make_mentor, make_opportunity, make_shift
+    )
+    mentor.is_active = False
+    await db.commit()
+
+    payload = {
+        "type": "block_actions",
+        "user": {"id": "U0REV"},
+        "response_url": "https://hooks.slack.test/x",
+        "actions": [{"action_id": "submission_approve", "value": str(sub.id)}],
+    }
+    resp = await _interact(client, payload)
+    assert resp.status_code == 200
+    await db.refresh(sub)
+    assert sub.status == SubmissionStatus.pending
+
+
 async def test_review_hours_modal_bad_hours_returns_errors(
     client, db, hush_slack, make_student, make_mentor, make_opportunity, make_shift
 ):

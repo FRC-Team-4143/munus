@@ -356,8 +356,13 @@ async def admin_opportunities_edit_get(opp_id: int, request: Request, db: AsyncS
         signups = (
             await db.execute(
                 select(Signup)
+                .join(Student, Student.id == Signup.student_id)
                 .options(selectinload(Signup.student))
-                .where(Signup.shift_id.in_(shift_ids), Signup.status == SignupStatus.signed_up)
+                .where(
+                    Signup.shift_id.in_(shift_ids),
+                    Signup.status == SignupStatus.signed_up,
+                    Student.is_active.is_(True),
+                )
                 .order_by(Signup.created_at)
             )
         ).scalars().all()
@@ -827,10 +832,22 @@ async def admin_submissions_edit_get(submission_id: int, request: Request, db: A
     ).scalars().first()
     if not submission:
         return RedirectResponse("/admin/submissions", status_code=303)
-    mentors = (await db.execute(select(Mentor).order_by(Mentor.name))).scalars().all()
+    mentors = (
+        await db.execute(select(Mentor).where(Mentor.is_active.is_(True)).order_by(Mentor.name))
+    ).scalars().all()
+    # If the submission's current reviewer has since been archived, keep them selectable
+    # (as a distinctly-labeled option) so re-saving the form without touching this field
+    # doesn't silently blank/reassign it — the picker itself still only offers active
+    # mentors for a *new* assignment.
+    archived_reviewer = None
+    if submission.reviewer is not None and not submission.reviewer.is_active:
+        archived_reviewer = submission.reviewer
     return templates.TemplateResponse(
         "admin/submission_edit.html",
-        {"request": request, "s": submission, "statuses": list(SubmissionStatus), "mentors": mentors},
+        {
+            "request": request, "s": submission, "statuses": list(SubmissionStatus),
+            "mentors": mentors, "archived_reviewer": archived_reviewer,
+        },
     )
 
 
@@ -1218,6 +1235,30 @@ async def admin_student_submissions(student_id: int, request: Request, db: Async
     return templates.TemplateResponse(
         "admin/_student_submissions_fragment.html",
         {"request": request, "student": student, "submissions": subs, "upcoming_signups": upcoming},
+    )
+
+
+@router.get("/report/archived", response_class=HTMLResponse)
+async def admin_report_archived(request: Request, q: Optional[str] = None, db: AsyncSession = Depends(get_db)):
+    """Deliberate, by-name lookup of an archived (is_active=False) student — the only
+    way to reach one from Munus's admin UI, since the report table and every dropdown
+    intentionally hide them. Not a list: a blank or sub-2-character query returns no
+    results rather than browsing every archived student, so this can't be used as an
+    "include archived" toggle. Munus mentors don't log their own hours (they only
+    appear as a submission's reviewer), so there's no per-mentor lookup here."""
+    if redirect := _require_auth(request):
+        return redirect
+    query = (q or "").strip()
+    students = []
+    if len(query) >= 2:
+        students = (await db.execute(
+            select(Student)
+            .where(Student.is_active.is_(False), func.lower(Student.name).like(f"%{query.lower()}%"))
+            .order_by(Student.name)
+        )).scalars().all()
+    return templates.TemplateResponse(
+        "admin/report_archived.html",
+        {"request": request, "q": query, "students": students},
     )
 
 

@@ -38,6 +38,28 @@ async def test_post_shift_prompt_sends_interactive_dm(
     assert su.prompted_at is not None
 
 
+async def test_post_shift_prompt_skips_archived_student(
+    db, session_factory, make_student, make_opportunity, make_shift, monkeypatch
+):
+    """An archived student's outstanding signup must not generate a post-shift DM —
+    they're no longer supposed to be visible/actionable anywhere in Munus."""
+    student = await make_student(slack="U0GRAD", is_active=False)
+    opp = await make_opportunity()
+    ended = await make_shift(opp.id, start_in_hours=-3, length_hours=2)
+    db.add(Signup(shift_id=ended.id, student_id=student.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    calls = []
+
+    async def fake_send_dm(*a, **k):
+        calls.append(a)
+
+    monkeypatch.setattr(scheduler, "send_dm", fake_send_dm)
+    monkeypatch.setattr(scheduler, "AsyncSessionLocal", session_factory)
+    await scheduler.job_post_shift_prompts()
+    assert calls == []
+
+
 async def test_post_shift_prompt_skips_already_submitted(
     db, session_factory, make_student, make_opportunity, make_shift, monkeypatch
 ):
@@ -97,6 +119,30 @@ async def test_auto_reject_closes_unlogged_shift(
     # Idempotent: a second run finds the existing (rejected) submission and adds nothing.
     await scheduler.job_auto_reject_unlogged()
     assert len((await db.execute(select(HourSubmission))).scalars().all()) == 1
+
+
+async def test_auto_reject_skips_archived_student(
+    db, session_factory, make_student, make_opportunity, make_shift, monkeypatch
+):
+    """An archived student's unlogged shift must not get an auto-reject submission
+    recorded against them."""
+    from app.models import HourSubmission
+
+    student = await make_student(slack="U0GRAD", is_active=False)
+    opp = await make_opportunity()
+    old = await make_shift(opp.id, start_in_hours=-200, length_hours=2)
+    db.add(Signup(shift_id=old.id, student_id=student.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    async def fake_send_dm(*a, **k):
+        pass
+
+    monkeypatch.setattr(scheduler, "send_dm", fake_send_dm)
+    monkeypatch.setattr(scheduler, "AsyncSessionLocal", session_factory)
+
+    await scheduler.job_auto_reject_unlogged()
+
+    assert (await db.execute(select(HourSubmission))).scalars().all() == []
 
 
 async def test_auto_reject_skips_submitted_and_respects_disable(
