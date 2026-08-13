@@ -42,6 +42,9 @@
     <a href="/admin/report/export?{{ qs[1:] }}" class="btn btn-sm btn-outline-primary">
       <i class="bi bi-download me-1"></i>Export CSV
     </a>
+    <a href="/admin/report/search" class="btn btn-sm btn-link text-muted">
+      <i class="bi bi-search me-1"></i>Search students
+    </a>
   </div>
 </div>
 
@@ -52,23 +55,6 @@
   <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
 </div>
 {% endif %}
-
-<!-- Archived-student lookup — separate from the filters/table below, which never show
-     archived students. This is a deliberate, by-name search, not an "include archived"
-     toggle on the report itself. -->
-<div class="card mb-3">
-  <div class="card-body py-2">
-    <form method="get" action="/admin/report/archived" class="row g-2 align-items-end">
-      <div class="col-auto">
-        <label class="form-label small mb-1">Look up an archived student</label>
-        <input type="text" name="q" class="form-control form-control-sm" placeholder="Name…" style="min-width: 220px;">
-      </div>
-      <div class="col-auto">
-        <button type="submit" class="btn btn-sm btn-outline-secondary">Search</button>
-      </div>
-    </form>
-  </div>
-</div>
 
 <!-- Filters -->
 <form method="get" class="row g-2 mb-3 align-items-end">

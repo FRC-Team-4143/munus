@@ -1,35 +1,37 @@
 {% extends "admin/base.html" %}
 {% set active_page = "report" %}
-{% block title %}Archived Student Lookup — Munus Admin{% endblock %}
+{% block title %}Search Students — Munus Admin{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-  <h2 class="mb-0">Archived Student Lookup</h2>
+  <h2 class="mb-0">Search Students</h2>
   <a href="/admin/report" class="btn btn-sm btn-outline-secondary">
     <i class="bi bi-arrow-left me-1"></i>Back to Report
   </a>
 </div>
 
-<p class="text-muted">
-  Archived students no longer appear in the season report or any dropdown — search by
-  name here to look up their submission history.
-</p>
-
-<form method="get" class="row g-2 mb-4 align-items-end">
-  <div class="col-auto" style="min-width: 260px;">
-    <label class="form-label small mb-1">Name</label>
-    <input type="text" name="q" class="form-control form-control-sm" value="{{ q }}"
-           placeholder="Type at least 2 characters" autofocus>
+<form method="get" class="mb-4">
+  <div class="row g-2 align-items-end">
+    <div class="col-auto" style="min-width: 260px;">
+      <label class="form-label small mb-1">Name</label>
+      <input type="text" name="q" class="form-control form-control-sm" value="{{ q }}"
+             placeholder="Type at least 2 characters" autofocus>
+    </div>
+    <div class="col-auto">
+      <button type="submit" class="btn btn-sm btn-primary">Search</button>
+    </div>
   </div>
-  <div class="col-auto">
-    <button type="submit" class="btn btn-sm btn-primary">Search</button>
+  <div class="form-check mt-2">
+    <input class="form-check-input" type="checkbox" id="includeArchived" name="archived" value="1"
+           {% if archived %}checked{% endif %} onchange="this.form.submit()">
+    <label class="form-check-label small" for="includeArchived">Include archived students</label>
   </div>
 </form>
 
 {% if q and q|length < 2 %}
 <div class="alert alert-secondary">Type at least 2 characters to search.</div>
 {% elif q and not students %}
-<div class="alert alert-secondary">No archived student matches "{{ q }}".</div>
+<div class="alert alert-secondary">No student matches "{{ q }}".</div>
 {% elif students %}
 <div class="card">
   <div class="card-body p-0">
@@ -40,7 +42,7 @@
       <tbody>
         {% for s in students %}
         <tr>
-          <td>{{ s.name }} <span class="badge bg-secondary ms-1">Archived</span></td>
+          <td>{{ s.name }}{% if not s.is_active %} <span class="badge bg-secondary ms-1">Archived</span>{% endif %}</td>
           <td class="text-muted">{{ s.level | levellabel }}</td>
           <td class="text-end">
             <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal"
