@@ -1238,6 +1238,58 @@ async def admin_student_submissions(student_id: int, request: Request, db: Async
     )
 
 
+@router.get("/report/archived/students/{student_id}", response_class=HTMLResponse)
+async def admin_report_archived_student(
+    student_id: int, request: Request,
+    date_from: Optional[date] = None, date_to: Optional[date] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Full totals + submission history for one student (active or archived), reached
+    only via the member search above — deliberately not linked from any list. Mirrors
+    Tempus's equivalent detail page rather than the older Report-screen modal (see
+    admin_student_submissions above): full page navigation, a Total Hours card, and a
+    date_from/date_to range picker that narrows the total + submission list together
+    (both default to all-time when omitted). The total counts **approved** hours only,
+    matching every other total in Munus (season progress, /vhours) — pending/rejected
+    submissions still show in the list but don't count toward it."""
+    if redirect := _require_auth(request):
+        return redirect
+    student = (await db.execute(select(Student).where(Student.id == student_id))).scalars().first()
+    if not student:
+        return RedirectResponse("/admin/report/search", status_code=303)
+
+    sub_q = (
+        select(HourSubmission)
+        .options(selectinload(HourSubmission.opportunity), selectinload(HourSubmission.reviewer))
+        .where(HourSubmission.student_id == student_id)
+    )
+    if date_from:
+        sub_q = sub_q.where(
+            HourSubmission.submitted_at >= local_to_utc(datetime.combine(date_from, datetime.min.time()))
+        )
+    if date_to:
+        sub_q = sub_q.where(
+            HourSubmission.submitted_at <= local_to_utc(datetime.combine(date_to, datetime.max.time()))
+        )
+    submissions = (
+        await db.execute(sub_q.order_by(HourSubmission.submitted_at.desc()))
+    ).scalars().all()
+    total_hours = round(
+        sum(s.hours for s in submissions if s.status == SubmissionStatus.approved), 2
+    )
+
+    upcoming = await upcoming_signups_for_student(db, student.id)
+
+    return templates.TemplateResponse(
+        "admin/report_archived_student.html",
+        {
+            "request": request, "student": student, "submissions": submissions,
+            "upcoming_signups": upcoming, "total_hours": total_hours,
+            "date_from": date_from, "date_to": date_to,
+        },
+    )
+
+
 @router.get("/report/search", response_class=HTMLResponse)
 async def admin_report_search(
     request: Request, q: Optional[str] = None, archived: Optional[int] = None,

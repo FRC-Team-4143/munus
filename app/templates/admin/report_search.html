@@ -45,10 +45,7 @@
           <td>{{ s.name }}{% if not s.is_active %} <span class="badge bg-secondary ms-1">Archived</span>{% endif %}</td>
           <td class="text-muted">{{ s.level | levellabel }}</td>
           <td class="text-end">
-            <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal"
-                    data-bs-target="#studentSubsModal" data-student-id="{{ s.id }}" data-student-name="{{ s.name }}">
-              View
-            </button>
+            <a href="/admin/report/archived/students/{{ s.id }}" class="btn btn-sm btn-outline-primary">View</a>
           </td>
         </tr>
         {% endfor %}
@@ -57,49 +54,4 @@
   </div>
 </div>
 {% endif %}
-
-<div class="modal fade" id="studentSubsModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-lg modal-dialog-scrollable">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title" id="studentSubsModalLabel">Activity</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body">
-        <div class="text-muted text-center py-4"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-  (function () {
-    var LOADING_HTML = '<div class="text-muted text-center py-4"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>';
-    var modalEl = document.getElementById('studentSubsModal');
-    var titleEl = document.getElementById('studentSubsModalLabel');
-    var bodyEl = modalEl.querySelector('.modal-body');
-
-    modalEl.addEventListener('show.bs.modal', function (event) {
-      var btn = event.relatedTarget;
-      var id = btn.dataset.studentId;
-      var name = btn.dataset.studentName;
-      titleEl.textContent = name + ' — Activity';
-      bodyEl.innerHTML = LOADING_HTML;
-      fetch('/admin/students/' + id + '/submissions')
-        .then(function (r) {
-          if (!r.ok) { throw new Error('request failed'); }
-          return r.text();
-        })
-        .then(function (html) { bodyEl.innerHTML = html; })
-        .catch(function () {
-          bodyEl.innerHTML = '<div class="alert alert-danger mb-0">Couldn\'t load activity. Try again.</div>';
-        });
-    });
-
-    modalEl.addEventListener('hidden.bs.modal', function () {
-      titleEl.textContent = 'Activity';
-      bodyEl.innerHTML = LOADING_HTML;
-    });
-  })();
-</script>
 {% endblock %}

@@ -1,0 +1,48 @@
+{% extends "admin/base.html" %}
+{% set active_page = "report" %}
+{% block title %}{{ student.name }} — Munus Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <h2 class="mb-0">{{ student.name }}{% if not student.is_active %} <span class="badge bg-secondary">Archived</span>{% endif %}</h2>
+  <a href="/admin/report/search" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left me-1"></i>Back to Search
+  </a>
+</div>
+
+<p class="text-muted">{{ student.level | levellabel }}</p>
+
+<form method="get" class="row g-2 mb-2 align-items-end">
+  <div class="col-auto">
+    <label class="form-label small mb-1">From</label>
+    <input type="date" name="date_from" class="form-control form-control-sm" value="{{ date_from or '' }}">
+  </div>
+  <div class="col-auto">
+    <label class="form-label small mb-1">To</label>
+    <input type="date" name="date_to" class="form-control form-control-sm" value="{{ date_to or '' }}">
+  </div>
+  <div class="col-auto">
+    <button type="submit" class="btn btn-sm btn-primary">Apply</button>
+    <a href="/admin/report/archived/students/{{ student.id }}" class="btn btn-sm btn-outline-secondary ms-1">All Time</a>
+  </div>
+</form>
+
+<div class="card mb-4">
+  <div class="card-body d-flex justify-content-between align-items-center">
+    <span class="text-muted">
+      Approved total —
+      {% if date_from or date_to %}{{ date_from or '…' }} – {{ date_to or '…' }}{% else %}all time{% endif %}
+    </span>
+    <span class="fs-4 fw-semibold">{{ '%.1f'|format(total_hours) }} hrs</span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    Submission history {% if date_from or date_to %}<span class="text-muted fw-normal">(filtered to range)</span>{% endif %}
+  </div>
+  <div class="card-body">
+    {% include "admin/_student_submissions_fragment.html" %}
+  </div>
+</div>
+{% endblock %}
