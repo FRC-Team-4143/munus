@@ -347,7 +347,7 @@ async def notify_reviewer(submission_id: int) -> None:
         if submission is None or submission.reviewer is None:
             return
         reviewer = submission.reviewer
-        if not reviewer.slack_user_id:
+        if not reviewer.is_active or not reviewer.slack_user_id:
             return
         await send_dm(
             reviewer.slack_user_id,

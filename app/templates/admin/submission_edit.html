@@ -41,6 +41,9 @@
           <label class="form-label">Reviewer</label>
           <select name="reviewer_mentor_id" class="form-select">
             <option value="">—</option>
+            {% if archived_reviewer %}
+            <option value="{{ archived_reviewer.id }}" selected>{{ archived_reviewer.name }} (archived)</option>
+            {% endif %}
             {% for m in mentors %}
             <option value="{{ m.id }}" {% if s.reviewer_mentor_id == m.id %}selected{% endif %}>{{ m.name }}</option>
             {% endfor %}

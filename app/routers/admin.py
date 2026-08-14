@@ -356,8 +356,13 @@ async def admin_opportunities_edit_get(opp_id: int, request: Request, db: AsyncS
         signups = (
             await db.execute(
                 select(Signup)
+                .join(Student, Student.id == Signup.student_id)
                 .options(selectinload(Signup.student))
-                .where(Signup.shift_id.in_(shift_ids), Signup.status == SignupStatus.signed_up)
+                .where(
+                    Signup.shift_id.in_(shift_ids),
+                    Signup.status == SignupStatus.signed_up,
+                    Student.is_active.is_(True),
+                )
                 .order_by(Signup.created_at)
             )
         ).scalars().all()
@@ -827,10 +832,22 @@ async def admin_submissions_edit_get(submission_id: int, request: Request, db: A
     ).scalars().first()
     if not submission:
         return RedirectResponse("/admin/submissions", status_code=303)
-    mentors = (await db.execute(select(Mentor).order_by(Mentor.name))).scalars().all()
+    mentors = (
+        await db.execute(select(Mentor).where(Mentor.is_active.is_(True)).order_by(Mentor.name))
+    ).scalars().all()
+    # If the submission's current reviewer has since been archived, keep them selectable
+    # (as a distinctly-labeled option) so re-saving the form without touching this field
+    # doesn't silently blank/reassign it — the picker itself still only offers active
+    # mentors for a *new* assignment.
+    archived_reviewer = None
+    if submission.reviewer is not None and not submission.reviewer.is_active:
+        archived_reviewer = submission.reviewer
     return templates.TemplateResponse(
         "admin/submission_edit.html",
-        {"request": request, "s": submission, "statuses": list(SubmissionStatus), "mentors": mentors},
+        {
+            "request": request, "s": submission, "statuses": list(SubmissionStatus),
+            "mentors": mentors, "archived_reviewer": archived_reviewer,
+        },
     )
 
 
@@ -1218,6 +1235,88 @@ async def admin_student_submissions(student_id: int, request: Request, db: Async
     return templates.TemplateResponse(
         "admin/_student_submissions_fragment.html",
         {"request": request, "student": student, "submissions": subs, "upcoming_signups": upcoming},
+    )
+
+
+@router.get("/report/archived/students/{student_id}", response_class=HTMLResponse)
+async def admin_report_archived_student(
+    student_id: int, request: Request,
+    date_from: Optional[date] = None, date_to: Optional[date] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Full totals + submission history for one student (active or archived), reached
+    only via the member search above — deliberately not linked from any list. Mirrors
+    Tempus's equivalent detail page rather than the older Report-screen modal (see
+    admin_student_submissions above): full page navigation, a Total Hours card, and a
+    date_from/date_to range picker that narrows the total + submission list together
+    (both default to all-time when omitted). The total counts **approved** hours only,
+    matching every other total in Munus (season progress, /vhours) — pending/rejected
+    submissions still show in the list but don't count toward it."""
+    if redirect := _require_auth(request):
+        return redirect
+    student = (await db.execute(select(Student).where(Student.id == student_id))).scalars().first()
+    if not student:
+        return RedirectResponse("/admin/report/search", status_code=303)
+
+    sub_q = (
+        select(HourSubmission)
+        .options(selectinload(HourSubmission.opportunity), selectinload(HourSubmission.reviewer))
+        .where(HourSubmission.student_id == student_id)
+    )
+    if date_from:
+        sub_q = sub_q.where(
+            HourSubmission.submitted_at >= local_to_utc(datetime.combine(date_from, datetime.min.time()))
+        )
+    if date_to:
+        sub_q = sub_q.where(
+            HourSubmission.submitted_at <= local_to_utc(datetime.combine(date_to, datetime.max.time()))
+        )
+    submissions = (
+        await db.execute(sub_q.order_by(HourSubmission.submitted_at.desc()))
+    ).scalars().all()
+    total_hours = round(
+        sum(s.hours for s in submissions if s.status == SubmissionStatus.approved), 2
+    )
+
+    upcoming = await upcoming_signups_for_student(db, student.id)
+
+    return templates.TemplateResponse(
+        "admin/report_archived_student.html",
+        {
+            "request": request, "student": student, "submissions": submissions,
+            "upcoming_signups": upcoming, "total_hours": total_hours,
+            "date_from": date_from, "date_to": date_to,
+        },
+    )
+
+
+@router.get("/report/search", response_class=HTMLResponse)
+async def admin_report_search(
+    request: Request, q: Optional[str] = None, archived: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """A buried, by-name student search — the only place an archived student is
+    reachable from Munus's admin UI, since the report table and every dropdown
+    intentionally hide them everywhere else. Searches active students by default;
+    the "Include archived" checkbox (`archived=1`) drops the is_active filter so both
+    active and archived matches show up together, each labeled. Not a browsable list:
+    a blank or sub-2-character query returns no results, so this never doubles as a
+    roster the way a bare "include archived" toggle on the main report would. Munus
+    mentors don't log their own hours (they only appear as a submission's reviewer),
+    so there's no per-mentor lookup here."""
+    if redirect := _require_auth(request):
+        return redirect
+    query = (q or "").strip()
+    include_archived = bool(archived)
+    students = []
+    if len(query) >= 2:
+        student_q = select(Student).where(func.lower(Student.name).like(f"%{query.lower()}%"))
+        if not include_archived:
+            student_q = student_q.where(Student.is_active.is_(True))
+        students = (await db.execute(student_q.order_by(Student.name))).scalars().all()
+    return templates.TemplateResponse(
+        "admin/report_search.html",
+        {"request": request, "q": query, "archived": include_archived, "students": students},
     )
 
 

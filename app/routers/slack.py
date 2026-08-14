@@ -79,11 +79,15 @@ async def slack_command(
         return Response(content="Unknown command.", media_type="text/plain")
 
     student = (
-        await db.execute(select(Student).where(Student.slack_user_id == user_id))
+        await db.execute(
+            select(Student).where(Student.slack_user_id == user_id, Student.is_active.is_(True))
+        )
     ).scalars().first()
     if not student:
         mentor = (
-            await db.execute(select(Mentor).where(Mentor.slack_user_id == user_id))
+            await db.execute(
+                select(Mentor).where(Mentor.slack_user_id == user_id, Mentor.is_active.is_(True))
+            )
         ).scalars().first()
         if mentor:
             # Not an error for a mentor — just nothing to report. Point them at the
@@ -193,7 +197,9 @@ async def _reviewer_name(db: AsyncSession, submission) -> Optional[str]:
     if submission.reviewer_mentor_id is None:
         return None
     m = (
-        await db.execute(select(Mentor).where(Mentor.id == submission.reviewer_mentor_id))
+        await db.execute(
+            select(Mentor).where(Mentor.id == submission.reviewer_mentor_id, Mentor.is_active.is_(True))
+        )
     ).scalars().first()
     return m.name if m else None
 
@@ -213,11 +219,15 @@ async def _load_submission(db: AsyncSession, submission_id: int) -> Optional[Hou
 
 
 async def _is_mentor(db: AsyncSession, acting_slack_id: str) -> bool:
-    """True if the acting Slack user is a known mentor (guards the reviewer-only edit modal)."""
+    """True if the acting Slack user is a known, active mentor (guards the
+    reviewer-only edit modal and the Approve/Reject actions) — an archived mentor
+    must not be able to review submissions via Slack."""
     if not acting_slack_id:
         return False
     m = (
-        await db.execute(select(Mentor).where(Mentor.slack_user_id == acting_slack_id))
+        await db.execute(
+            select(Mentor).where(Mentor.slack_user_id == acting_slack_id, Mentor.is_active.is_(True))
+        )
     ).scalars().first()
     return m is not None
 

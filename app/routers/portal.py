@@ -389,7 +389,11 @@ async def opportunity_detail(
             await db.execute(
                 select(Signup.shift_id, Student.name)
                 .join(Student, Student.id == Signup.student_id)
-                .where(Signup.shift_id.in_(shift_ids), Signup.status == SignupStatus.signed_up)
+                .where(
+                    Signup.shift_id.in_(shift_ids),
+                    Signup.status == SignupStatus.signed_up,
+                    Student.is_active.is_(True),
+                )
                 .order_by(Signup.created_at)
             )
         ).all()

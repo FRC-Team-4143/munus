@@ -17,7 +17,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models import (
-    HourSubmission, Opportunity, Shift, Signup, SignupStatus, SubmissionStatus,
+    HourSubmission, Opportunity, Shift, Signup, SignupStatus, Student, SubmissionStatus,
 )
 from app.services import audit, submissions
 from app.services.slack_client import send_dm
@@ -42,11 +42,13 @@ async def job_shift_reminders() -> None:
                     selectinload(Signup.shift).selectinload(Shift.opportunity),
                 )
                 .join(Shift, Shift.id == Signup.shift_id)
+                .join(Student, Student.id == Signup.student_id)
                 .where(
                     Signup.status == SignupStatus.signed_up,
                     Signup.reminded_at.is_(None),
                     Shift.start_time > now,
                     Shift.start_time <= horizon,
+                    Student.is_active.is_(True),
                 )
             )
         ).scalars().all()
@@ -86,10 +88,12 @@ async def job_post_shift_prompts() -> None:
                     selectinload(Signup.shift).selectinload(Shift.opportunity),
                 )
                 .join(Shift, Shift.id == Signup.shift_id)
+                .join(Student, Student.id == Signup.student_id)
                 .where(
                     Signup.status == SignupStatus.signed_up,
                     Signup.prompted_at.is_(None),
                     Shift.end_time <= now,
+                    Student.is_active.is_(True),
                 )
             )
         ).scalars().all()
@@ -143,9 +147,11 @@ async def job_auto_reject_unlogged() -> None:
                     selectinload(Signup.shift).selectinload(Shift.opportunity),
                 )
                 .join(Shift, Shift.id == Signup.shift_id)
+                .join(Student, Student.id == Signup.student_id)
                 .where(
                     Signup.status == SignupStatus.signed_up,
                     Shift.end_time <= cutoff,
+                    Student.is_active.is_(True),
                 )
             )
         ).scalars().all()
