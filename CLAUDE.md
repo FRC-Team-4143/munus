@@ -193,6 +193,24 @@ shift/continuous trigger has fired yet). `opportunity_announcement_blocks` needs
 `opp.shifts` eager-loaded (`selectinload`) before it's called — it's synchronous and
 can't lazy-load across an async session.
 
+### CSV exports
+`/admin/report/export` has two shapes. Default is the **season progress report** mirroring
+the on-screen table — pinned to `season_start`, active students only, no date range at all.
+`?mode=totals` is the flat **one-row-per-student** approved-hours file
+(`reports.student_hours_totals`) over an arbitrary range, for handing to an outside program
+(e.g. Silver Cords, which awards at 200 hours across a whole high-school career — several
+seasons, and students who have since graduated). It takes `archived=1` for exactly that
+reason. Note `HourSubmission` has **no date-performed column**, so every range filter here
+(like the detail page and the season cutoff) is on `submitted_at` — the CSV labels those
+columns "(submitted)" rather than let an outside reader assume service dates.
+
+The per-student detail CSV is `/admin/report/archived/students/{id}/export`, parsing
+`date_from`/`date_to` exactly like its HTML twin so the button is just the page URL +
+`/export` + the same query string. It lists every status (the page's list does too; only
+its *total* is approved-only). Linked from single-student surfaces only — the detail page
+and the report modal's header link (all-time); the student search page deliberately has no
+export.
+
 ### Database migrations
 No Alembic. Add a `def _migration(conn)` guarded by `inspect(conn)` in `database.py` and
 call it from `init_db()`, mirroring Tempus. No production data predates the Legion
