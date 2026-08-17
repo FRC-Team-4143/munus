@@ -28,7 +28,9 @@ from app.services.app_settings import get_season_start, season_start_utc, set_se
 from app.services.opportunities import (
     announce_opportunity, update_announcement, upcoming_signups_for_student,
 )
-from app.services.reports import student_progress_report, student_vhours_message
+from app.services.reports import (
+    student_hours_totals, student_progress_report, student_vhours_message,
+)
 from app.services.requirements import (
     level_requirements_map, resolve_required_hours, season_required_opportunities,
     season_total_hours,
@@ -55,6 +57,18 @@ templates.env.filters["levellabel"] = level_label
 def _opt_id(raw: Optional[str]) -> Optional[int]:
     """Parse an optional integer form field (e.g. a mentor dropdown), '' -> None."""
     return int(raw) if raw and str(raw).strip() else None
+
+
+def _range_slug(date_from: Optional[date], date_to: Optional[date]) -> str:
+    """Filename fragment for an export's date range — 'all-time' when unbounded."""
+    if not date_from and not date_to:
+        return "all-time"
+    return f"{date_from or 'start'}_{date_to or 'today'}"
+
+
+def _name_slug(name: str) -> str:
+    """A student's name, safe to drop in a Content-Disposition filename."""
+    return re.sub(r"[^a-z0-9]+", "-", (name or "student").lower()).strip("-") or "student"
 
 
 def _parse_shift_times(date: str, start_time: str, end_time: str) -> tuple[datetime, datetime]:
@@ -1290,6 +1304,72 @@ async def admin_report_archived_student(
     )
 
 
+@router.get("/report/archived/students/{student_id}/export")
+async def admin_report_archived_student_export(
+    student_id: int, request: Request,
+    date_from: Optional[date] = None, date_to: Optional[date] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """One student's raw submission history as CSV, one row per submission. Parses its
+    date params exactly like the HTML page above, so the export button is just that
+    page's URL plus `/export` and the same query string — the file always matches what's
+    on screen. Every status is included (with a Status column), matching the page's list;
+    only the page's *total* is approved-only, and per-student totals live in
+    `/admin/report/export?mode=totals` rather than a trailing row here, which would only
+    get in the way of parsing."""
+    if redirect := _require_auth(request):
+        return redirect
+    student = (await db.execute(select(Student).where(Student.id == student_id))).scalars().first()
+    if not student:
+        return RedirectResponse("/admin/report/search", status_code=303)
+
+    sub_q = (
+        select(HourSubmission)
+        .options(
+            selectinload(HourSubmission.opportunity),
+            selectinload(HourSubmission.shift),
+            selectinload(HourSubmission.reviewer),
+        )
+        .where(HourSubmission.student_id == student_id)
+    )
+    if date_from:
+        sub_q = sub_q.where(
+            HourSubmission.submitted_at >= local_to_utc(datetime.combine(date_from, datetime.min.time()))
+        )
+    if date_to:
+        sub_q = sub_q.where(
+            HourSubmission.submitted_at <= local_to_utc(datetime.combine(date_to, datetime.max.time()))
+        )
+    submissions = (
+        await db.execute(sub_q.order_by(HourSubmission.submitted_at.desc()))
+    ).scalars().all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Name", "Member Code", "Opportunity", "Shift", "Hours", "Status",
+        "Submitted", "Reviewer",
+    ])
+    for s in submissions:
+        writer.writerow([
+            student.name,
+            student.member_code or "",
+            s.opportunity.name if s.opportunity else "",
+            format_shift_range(s.shift.start_time, s.shift.end_time) if s.shift else "",
+            f"{s.hours:.2f}",
+            s.status.value if s.status else "",
+            utc_to_local(s.submitted_at).isoformat() if s.submitted_at else "",
+            s.reviewer.name if s.reviewer else "",
+        ])
+
+    filename = f"{_name_slug(student.name)}_hours_{_range_slug(date_from, date_to)}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/report/search", response_class=HTMLResponse)
 async def admin_report_search(
     request: Request, q: Optional[str] = None, archived: Optional[int] = None,
@@ -1361,10 +1441,62 @@ async def admin_report_notify(
 async def admin_report_export(
     request: Request,
     level: Optional[str] = None,
+    mode: Optional[str] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    archived: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
 ):
+    """The report's CSV, in two shapes.
+
+    Default (`mode` unset) is the season progress report mirroring the on-screen table —
+    approved/projected/required against the current `season_start`, active students only.
+
+    `mode=totals` answers a different question: how many approved hours each student
+    banked between two arbitrary dates, for a program outside Munus (e.g. Silver Cords,
+    which awards at 200 hours across a whole high-school career). The season report can't
+    serve that — it has no date range at all, and it hides archived students, who a
+    multi-year window necessarily includes. Totals mode takes `archived=1` for that.
+    """
     if redirect := _require_auth(request):
         return redirect
+
+    if mode == "totals":
+        totals = await student_hours_totals(
+            db, date_from, date_to,
+            level=_parse_level(level), include_archived=bool(archived),
+        )
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        # "(submitted)" is not decoration: HourSubmission has no date-performed column,
+        # so the window is on submitted_at. Say so rather than let an outside reader
+        # assume these are service dates.
+        writer.writerow([
+            "Name", "Member Code", "Team", "Level", "Status",
+            "Approved Hours", "Submissions",
+            "Range Start (submitted)", "Range End (submitted)",
+        ])
+        for r in totals:
+            s = r["student"]
+            writer.writerow([
+                s.name,
+                s.member_code or "",
+                s.team_number or "",
+                level_label(s.level),
+                "active" if s.is_active else "archived",
+                f"{r['approved_hours']:.2f}",
+                r["submission_count"],
+                date_from.isoformat() if date_from else "",
+                date_to.isoformat() if date_to else "",
+            ])
+
+        filename = f"munus_hour_totals_{_range_slug(date_from, date_to)}.csv"
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     rows = await student_progress_report(db, level=_parse_level(level))
 

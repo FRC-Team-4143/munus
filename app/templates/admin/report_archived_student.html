@@ -5,9 +5,19 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
   <h2 class="mb-0">{{ student.name }}{% if not student.is_active %} <span class="badge bg-secondary">Archived</span>{% endif %}</h2>
-  <a href="/admin/report/search" class="btn btn-sm btn-outline-secondary">
-    <i class="bi bi-arrow-left me-1"></i>Back to Search
-  </a>
+  {# Carry the page's own range so the file always matches what's on screen. #}
+  {% set range_qs = [] %}
+  {% if date_from %}{% set _ = range_qs.append("date_from=" ~ date_from) %}{% endif %}
+  {% if date_to %}{% set _ = range_qs.append("date_to=" ~ date_to) %}{% endif %}
+  <div class="d-flex gap-2 flex-wrap">
+    <a href="/admin/report/archived/students/{{ student.id }}/export{% if range_qs %}?{{ range_qs | join('&') }}{% endif %}"
+       class="btn btn-sm btn-outline-primary">
+      <i class="bi bi-download me-1"></i>Export CSV
+    </a>
+    <a href="/admin/report/search" class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-arrow-left me-1"></i>Back to Search
+    </a>
+  </div>
 </div>
 
 <p class="text-muted">{{ student.level | levellabel }}</p>

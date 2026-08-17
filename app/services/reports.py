@@ -5,6 +5,7 @@ Munus requirements are a season total by level (not weekly like Tempus), so the 
 a roster progress table rather than a per-week grid. All aggregates are computed with a
 handful of grouped queries (no per-student N+1).
 """
+from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import func, select
@@ -20,7 +21,79 @@ from app.services.requirements import (
     level_requirements_map, resolve_required_hours, season_required_opportunities,
     season_total_hours,
 )
-from app.utils import format_shift_range, now_utc, shift_length_hours
+from app.utils import format_shift_range, local_to_utc, now_utc, shift_length_hours
+
+
+async def student_hours_totals(
+    db: AsyncSession,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    *,
+    level: Optional[StudentLevel] = None,
+    include_archived: bool = False,
+) -> list[dict]:
+    """
+    A flat, one-row-per-student approved-hours total over an arbitrary date range:
+      {"student": Student, "approved_hours": float, "submission_count": int}
+    sorted by name.
+
+    Separate from `student_progress_report` because that one is a *season* view: it is
+    pinned to the `season_start` cutoff, carries projected/required/met columns that only
+    mean anything within a season, and hides archived students. This answers a different
+    question — "how many hours has each person banked between these two dates" — for an
+    outside program (e.g. Silver Cords, which awards at 200 hours across a high-school
+    career, spanning several seasons and students who have since graduated).
+
+    Counts **approved** submissions only, matching every other total in Munus.
+
+    Caveat, and the reason the caller labels its columns "(submitted)": `HourSubmission`
+    has no "date performed" column, so the range filters on `submitted_at`, exactly like
+    the per-student detail page and the season cutoff do.
+
+    Both bounds are optional; omitted means unbounded in that direction. Students with no
+    approved hours in range are still returned, at 0.0 — the caller is producing a roster
+    file, where a missing row reads as "not on the team" rather than "no hours".
+    """
+    student_q = select(Student).order_by(Student.name)
+    if level is not None:
+        student_q = student_q.where(Student.level == level)
+    if not include_archived:
+        student_q = student_q.where(Student.is_active.is_(True))
+    students = (await db.execute(student_q)).scalars().all()
+    if not students:
+        return []
+
+    totals_q = (
+        select(
+            HourSubmission.student_id,
+            func.coalesce(func.sum(HourSubmission.hours), 0.0),
+            func.count(HourSubmission.id),
+        )
+        .where(
+            HourSubmission.student_id.in_([s.id for s in students]),
+            HourSubmission.status == SubmissionStatus.approved,
+        )
+        .group_by(HourSubmission.student_id)
+    )
+    if date_from is not None:
+        totals_q = totals_q.where(
+            HourSubmission.submitted_at >= local_to_utc(datetime.combine(date_from, datetime.min.time()))
+        )
+    if date_to is not None:
+        totals_q = totals_q.where(
+            HourSubmission.submitted_at <= local_to_utc(datetime.combine(date_to, datetime.max.time()))
+        )
+    totals = {row[0]: (float(row[1]), row[2]) for row in (await db.execute(totals_q)).all()}
+
+    rows = []
+    for student in students:
+        hours, count = totals.get(student.id, (0.0, 0))
+        rows.append({
+            "student": student,
+            "approved_hours": round(hours, 2),
+            "submission_count": count,
+        })
+    return rows
 
 
 async def student_progress_report(
