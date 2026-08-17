@@ -194,15 +194,20 @@ shift/continuous trigger has fired yet). `opportunity_announcement_blocks` needs
 can't lazy-load across an async session.
 
 ### CSV exports
-`/admin/report/export` has two shapes. Default is the **season progress report** mirroring
-the on-screen table — pinned to `season_start`, active students only, no date range at all.
-`?mode=totals` is the flat **one-row-per-student** approved-hours file
-(`reports.student_hours_totals`) over an arbitrary range, for handing to an outside program
-(e.g. Silver Cords, which awards at 200 hours across a whole high-school career — several
-seasons, and students who have since graduated). It takes `archived=1` for exactly that
-reason. Note `HourSubmission` has **no date-performed column**, so every range filter here
-(like the detail page and the season cutoff) is on `submitted_at` — the CSV labels those
-columns "(submitted)" rather than let an outside reader assume service dates.
+`/admin/report/export`, opened via the report page's **Export CSV** button (a modal for
+picking a date range — blank means all-time — and an "include archived students"
+checkbox), is a single combined shape: one row per hour submission, grouped by student,
+with a `TOTAL` subtotal row after each student's submissions
+(`reports.student_submission_export_rows`). Every submission status is listed, but each
+`TOTAL` row counts only **approved** hours, matching every other total in Munus. It takes
+`archived=1` to include students who have since left the roster — useful for a wide range
+handed to an outside program (e.g. Silver Cords, which awards at 200 hours across a whole
+high-school career, spanning several seasons). Note `HourSubmission` has **no
+date-performed column**, so the range filter is on `submitted_at`, same as the detail page
+and the season cutoff. The on-screen season-progress table (approved/projected/required/
+remaining/%/pending/upcoming/missing-required-opportunities/met, pinned to `season_start`)
+is unchanged and still active-students-only — those KPI columns are view-only now, not
+exportable as CSV.
 
 The per-student detail CSV is `/admin/report/archived/students/{id}/export`, parsing
 `date_from`/`date_to` exactly like its HTML twin so the button is just the page URL +

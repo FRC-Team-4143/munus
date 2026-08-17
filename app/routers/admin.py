@@ -29,7 +29,7 @@ from app.services.opportunities import (
     announce_opportunity, update_announcement, upcoming_signups_for_student,
 )
 from app.services.reports import (
-    student_hours_totals, student_progress_report, student_vhours_message,
+    student_progress_report, student_submission_export_rows, student_vhours_message,
 )
 from app.services.requirements import (
     level_requirements_map, resolve_required_hours, season_required_opportunities,
@@ -1315,8 +1315,8 @@ async def admin_report_archived_student_export(
     page's URL plus `/export` and the same query string — the file always matches what's
     on screen. Every status is included (with a Status column), matching the page's list;
     only the page's *total* is approved-only, and per-student totals live in
-    `/admin/report/export?mode=totals` rather than a trailing row here, which would only
-    get in the way of parsing."""
+    `/admin/report/export` rather than a trailing row here, which would only get in the
+    way of parsing."""
     if redirect := _require_auth(request):
         return redirect
     student = (await db.execute(select(Student).where(Student.id == student_id))).scalars().first()
@@ -1441,84 +1441,69 @@ async def admin_report_notify(
 async def admin_report_export(
     request: Request,
     level: Optional[str] = None,
-    mode: Optional[str] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     archived: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """The report's CSV, in two shapes.
-
-    Default (`mode` unset) is the season progress report mirroring the on-screen table —
-    approved/projected/required against the current `season_start`, active students only.
-
-    `mode=totals` answers a different question: how many approved hours each student
-    banked between two arbitrary dates, for a program outside Munus (e.g. Silver Cords,
-    which awards at 200 hours across a whole high-school career). The season report can't
-    serve that — it has no date range at all, and it hides archived students, who a
-    multi-year window necessarily includes. Totals mode takes `archived=1` for that.
+    """The report's CSV: one row per hour submission, grouped by student, with a TOTAL
+    subtotal row after each student's submissions — so a single file carries both the
+    full submission history and each student's approved-hours total. No default window:
+    blank date_from/date_to means all-time (unlike the on-screen season-progress table,
+    which is pinned to `season_start`). Honors `archived=1` to include students who have
+    since left the roster. Every submission status is listed, but the TOTAL row only
+    counts approved hours, matching every other total in Munus. `HourSubmission` has no
+    date-performed column, so the range filters on `submitted_at`.
     """
     if redirect := _require_auth(request):
         return redirect
 
-    if mode == "totals":
-        totals = await student_hours_totals(
-            db, date_from, date_to,
-            level=_parse_level(level), include_archived=bool(archived),
-        )
-
-        output = io.StringIO()
-        writer = csv.writer(output)
-        # "(submitted)" is not decoration: HourSubmission has no date-performed column,
-        # so the window is on submitted_at. Say so rather than let an outside reader
-        # assume these are service dates.
-        writer.writerow([
-            "Name", "Member Code", "Team", "Level", "Status",
-            "Approved Hours", "Submissions",
-            "Range Start (submitted)", "Range End (submitted)",
-        ])
-        for r in totals:
-            s = r["student"]
-            writer.writerow([
-                s.name,
-                s.member_code or "",
-                s.team_number or "",
-                level_label(s.level),
-                "active" if s.is_active else "archived",
-                f"{r['approved_hours']:.2f}",
-                r["submission_count"],
-                date_from.isoformat() if date_from else "",
-                date_to.isoformat() if date_to else "",
-            ])
-
-        filename = f"munus_hour_totals_{_range_slug(date_from, date_to)}.csv"
-        return StreamingResponse(
-            iter([output.getvalue()]),
-            media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
-    rows = await student_progress_report(db, level=_parse_level(level))
+    rows = await student_submission_export_rows(
+        db, date_from, date_to,
+        level=_parse_level(level), include_archived=bool(archived),
+    )
 
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "Student", "Level", "Approved Hours", "Projected Hours", "Required Hours",
-        "Remaining", "Percent Complete", "Pending Submissions", "Upcoming Shifts",
-        "Missing Required Opportunities", "Met",
+        "Student", "Member Code", "Level", "Opportunity", "Shift", "Hours", "Status",
+        "Submitted", "Reviewer", "Approved Hours", "Submissions",
     ])
-    for r in rows:
-        s = r["student"]
+    for row in rows:
+        s = row["student"]
+        for sub in row["submissions"]:
+            writer.writerow([
+                s.name,
+                s.member_code or "",
+                level_label(s.level),
+                sub.opportunity.name if sub.opportunity else "",
+                format_shift_range(sub.shift.start_time, sub.shift.end_time) if sub.shift else "",
+                f"{sub.hours:.2f}",
+                sub.status.value if sub.status else "",
+                utc_to_local(sub.submitted_at).isoformat() if sub.submitted_at else "",
+                sub.reviewer.name if sub.reviewer else "",
+                "",
+                "",
+            ])
         writer.writerow([
-            s.name, level_label(s.level), r["approved"], r["projected"], r["required"],
-            r["remaining"], r["pct"], r["pending_count"], r["upcoming_count"],
-            "; ".join(r["missing_required"]), "yes" if r["met"] else "no",
+            s.name,
+            s.member_code or "",
+            level_label(s.level),
+            "",
+            "",
+            "",
+            "TOTAL",
+            "",
+            "",
+            f"{row['total_hours']:.2f}",
+            row["submission_count"],
         ])
 
+    filename = f"munus_report_{_range_slug(date_from, date_to)}.csv"
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=munus_report.csv"},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
