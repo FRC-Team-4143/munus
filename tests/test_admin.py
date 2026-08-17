@@ -353,7 +353,7 @@ async def test_admin_report_export_csv(client):
     resp = await client.get("/admin/report/export")
     assert resp.status_code == 200
     assert "text/csv" in resp.headers["content-type"]
-    assert "Student,Level,Approved Hours,Projected Hours" in resp.text
+    assert "Student,Member Code,Level,Opportunity,Shift,Hours,Status" in resp.text
 
 
 async def test_admin_student_submissions_requires_auth(client, make_student):
@@ -752,7 +752,10 @@ async def test_shift_delete_updates_announcement(client, db, make_opportunity, m
     assert len(calls) == 1
 
 
-async def test_admin_report_and_export_surface_missing_required_opportunity(client, db, make_student, make_opportunity, make_shift):
+async def test_admin_report_surfaces_missing_required_opportunity(client, db, make_student, make_opportunity, make_shift):
+    """Missing-required-opportunity tracking is a season-progress KPI — it's shown on
+    the on-screen report table but isn't part of the CSV export's combined
+    submission-log + total shape (see test_hours_export.py)."""
     from app.models import StudentLevel
 
     await _login(client)
@@ -763,10 +766,6 @@ async def test_admin_report_and_export_surface_missing_required_opportunity(clie
     report = await client.get("/admin/report")
     assert report.status_code == 200
     assert 'title="Missing: Bag Night"' in report.text
-
-    export = await client.get("/admin/report/export")
-    assert export.status_code == 200
-    assert "Bag Night" in export.text
 
 
 async def test_admin_edit_shift_updates_fields(client, db, make_opportunity, make_shift):

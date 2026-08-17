@@ -5,11 +5,13 @@ Munus requirements are a season total by level (not weekly like Tempus), so the 
 a roster progress table rather than a per-week grid. All aggregates are computed with a
 handful of grouped queries (no per-student N+1).
 """
+from collections import defaultdict
 from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models import (
@@ -24,7 +26,7 @@ from app.services.requirements import (
 from app.utils import format_shift_range, local_to_utc, now_utc, shift_length_hours
 
 
-async def student_hours_totals(
+async def student_submission_export_rows(
     db: AsyncSession,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
@@ -33,25 +35,29 @@ async def student_hours_totals(
     include_archived: bool = False,
 ) -> list[dict]:
     """
-    A flat, one-row-per-student approved-hours total over an arbitrary date range:
-      {"student": Student, "approved_hours": float, "submission_count": int}
+    The report page's combined CSV export: every student's individual hour submissions
+    in an arbitrary date range, plus their approved-hours total, in one pass:
+      {"student": Student, "submissions": [HourSubmission, ...], "total_hours": float,
+       "submission_count": int}
     sorted by name.
 
     Separate from `student_progress_report` because that one is a *season* view: it is
     pinned to the `season_start` cutoff, carries projected/required/met columns that only
     mean anything within a season, and hides archived students. This answers a different
-    question — "how many hours has each person banked between these two dates" — for an
-    outside program (e.g. Silver Cords, which awards at 200 hours across a high-school
-    career, spanning several seasons and students who have since graduated).
+    question — "what did each person submit between these two dates, and how many
+    approved hours does that add up to" — for an outside program (e.g. Silver Cords,
+    which awards at 200 hours across a high-school career, spanning several seasons and
+    students who have since graduated).
 
-    Counts **approved** submissions only, matching every other total in Munus.
+    Lists **every status** (pending/approved/rejected), matching the per-student detail
+    export's convention — but `total_hours` counts only **approved** submissions,
+    matching every other total in Munus.
 
-    Caveat, and the reason the caller labels its columns "(submitted)": `HourSubmission`
-    has no "date performed" column, so the range filters on `submitted_at`, exactly like
-    the per-student detail page and the season cutoff do.
+    Caveat: `HourSubmission` has no "date performed" column, so the range filters on
+    `submitted_at`, exactly like the per-student detail page and the season cutoff do.
 
     Both bounds are optional; omitted means unbounded in that direction. Students with no
-    approved hours in range are still returned, at 0.0 — the caller is producing a roster
+    submissions in range are still returned, at 0.0 — the caller is producing a roster
     file, where a missing row reads as "not on the team" rather than "no hours".
     """
     student_q = select(Student).order_by(Student.name)
@@ -63,35 +69,41 @@ async def student_hours_totals(
     if not students:
         return []
 
-    totals_q = (
-        select(
-            HourSubmission.student_id,
-            func.coalesce(func.sum(HourSubmission.hours), 0.0),
-            func.count(HourSubmission.id),
+    sub_q = (
+        select(HourSubmission)
+        .options(
+            selectinload(HourSubmission.opportunity),
+            selectinload(HourSubmission.shift),
+            selectinload(HourSubmission.reviewer),
         )
-        .where(
-            HourSubmission.student_id.in_([s.id for s in students]),
-            HourSubmission.status == SubmissionStatus.approved,
-        )
-        .group_by(HourSubmission.student_id)
+        .where(HourSubmission.student_id.in_([s.id for s in students]))
     )
     if date_from is not None:
-        totals_q = totals_q.where(
+        sub_q = sub_q.where(
             HourSubmission.submitted_at >= local_to_utc(datetime.combine(date_from, datetime.min.time()))
         )
     if date_to is not None:
-        totals_q = totals_q.where(
+        sub_q = sub_q.where(
             HourSubmission.submitted_at <= local_to_utc(datetime.combine(date_to, datetime.max.time()))
         )
-    totals = {row[0]: (float(row[1]), row[2]) for row in (await db.execute(totals_q)).all()}
+    sub_q = sub_q.order_by(HourSubmission.student_id, HourSubmission.submitted_at.desc())
+    submissions = (await db.execute(sub_q)).scalars().all()
+
+    submissions_by_student: dict[int, list] = defaultdict(list)
+    for sub in submissions:
+        submissions_by_student[sub.student_id].append(sub)
 
     rows = []
     for student in students:
-        hours, count = totals.get(student.id, (0.0, 0))
+        student_subs = submissions_by_student.get(student.id, [])
+        total_hours = sum(
+            sub.hours for sub in student_subs if sub.status == SubmissionStatus.approved
+        )
         rows.append({
             "student": student,
-            "approved_hours": round(hours, 2),
-            "submission_count": count,
+            "submissions": student_subs,
+            "total_hours": round(total_hours, 2),
+            "submission_count": len(student_subs),
         })
     return rows
 

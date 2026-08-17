@@ -39,9 +39,9 @@
       </button>
     </form>
     {% endif %}
-    <a href="/admin/report/export?{{ qs[1:] }}" class="btn btn-sm btn-outline-primary">
+    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#exportReportModal">
       <i class="bi bi-download me-1"></i>Export CSV
-    </a>
+    </button>
     <a href="/admin/report/search" class="btn btn-sm btn-link text-muted">
       <i class="bi bi-search me-1"></i>Search students
     </a>
@@ -69,42 +69,39 @@
   </div>
 </form>
 
-<!-- Totals export: a flat per-student file for outside programs (e.g. Silver Cords),
-     over its own date range rather than the season the table above is pinned to. -->
-<div class="card mb-3">
-  <div class="card-header py-2">
-    <a href="#exportTotals" data-bs-toggle="collapse" class="text-decoration-none small">
-      <i class="bi bi-filetype-csv me-1"></i>Export hour totals (any date range)
-    </a>
-  </div>
-  <div class="collapse" id="exportTotals">
-    <div class="card-body">
-      <p class="small text-muted mb-3">
-        One row per student — name, member code, and total <strong>approved</strong> hours
-        for the range. Leave the dates blank for all-time. Unlike the table above, this
-        isn't tied to the current season, so it can span a whole high-school career.
-        Dates filter on when hours were <em>submitted</em>.
-      </p>
-      <form method="get" action="/admin/report/export" class="row g-2 align-items-end">
-        <input type="hidden" name="mode" value="totals">
-        {% if current_level %}<input type="hidden" name="level" value="{{ current_level }}">{% endif %}
-        <div class="col-auto">
-          <label class="form-label small mb-1">From</label>
-          <input type="date" name="date_from" class="form-control form-control-sm">
+<div class="modal fade" id="exportReportModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="get" action="/admin/report/export">
+        <div class="modal-header">
+          <h5 class="modal-title">Export CSV</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
-        <div class="col-auto">
-          <label class="form-label small mb-1">To</label>
-          <input type="date" name="date_to" class="form-control form-control-sm">
-        </div>
-        <div class="col-auto">
-          <div class="form-check">
-            <input class="form-check-input" type="checkbox" name="archived" value="1" id="totalsArchived">
-            <label class="form-check-label small" for="totalsArchived">Include archived students</label>
+        <div class="modal-body">
+          <p class="small text-muted">
+            One row per submission, grouped by student, with an approved hours total
+            after each student. Leave dates blank for all time.
+          </p>
+          {% if current_level %}<input type="hidden" name="level" value="{{ current_level }}">{% endif %}
+          <div class="row g-2">
+            <div class="col-auto">
+              <label class="form-label small mb-1">From</label>
+              <input type="date" name="date_from" class="form-control form-control-sm">
+            </div>
+            <div class="col-auto">
+              <label class="form-label small mb-1">To</label>
+              <input type="date" name="date_to" class="form-control form-control-sm">
+            </div>
+          </div>
+          <div class="form-check mt-3">
+            <input class="form-check-input" type="checkbox" name="archived" value="1" id="exportArchived">
+            <label class="form-check-label small" for="exportArchived">Include archived students</label>
           </div>
         </div>
-        <div class="col-auto">
-          <button type="submit" class="btn btn-sm btn-outline-primary">
-            <i class="bi bi-download me-1"></i>Export totals
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary btn-sm">
+            <i class="bi bi-download me-1"></i>Export CSV
           </button>
         </div>
       </form>
