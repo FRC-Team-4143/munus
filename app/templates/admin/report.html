@@ -184,10 +184,12 @@
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="studentSubsModalLabel">Activity</h5>
-        <a href="#" id="studentSubsExportLink" class="btn btn-sm btn-outline-primary ms-auto me-2">
-          <i class="bi bi-download me-1"></i>Export CSV
-        </a>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        <div class="d-flex align-items-center gap-2">
+          <a href="#" id="studentSubsExportLink" class="btn btn-sm btn-outline-primary">
+            <i class="bi bi-download me-1"></i>Export CSV
+          </a>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
       </div>
       <div class="modal-body">
         <div class="text-muted text-center py-4"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>
@@ -203,14 +205,17 @@
     var titleEl = document.getElementById('studentSubsModalLabel');
     var exportLinkEl = document.getElementById('studentSubsExportLink');
     var bodyEl = modalEl.querySelector('.modal-body');
+    var seasonStart = {{ (season_start.isoformat() | tojson) if season_start else 'null' }};
 
     modalEl.addEventListener('show.bs.modal', function (event) {
       var btn = event.relatedTarget;
       var id = btn.dataset.studentId;
       var name = btn.dataset.studentName;
       titleEl.textContent = name + ' — Activity';
-      // No date params: the modal lists every submission ever, so its export does too.
-      exportLinkEl.href = '/admin/report/archived/students/' + id + '/export';
+      // Scoped to the season window (season_start) when a cutoff is configured,
+      // unlike the full detail page's own export which defaults to all-time.
+      exportLinkEl.href = '/admin/report/archived/students/' + id + '/export'
+        + (seasonStart ? ('?date_from=' + seasonStart) : '');
       bodyEl.innerHTML = LOADING_HTML;
       fetch('/admin/students/' + id + '/submissions')
         .then(function (r) {

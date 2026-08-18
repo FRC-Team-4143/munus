@@ -1212,6 +1212,7 @@ async def admin_report(
     required_opportunity_names = [
         o.name for o in await season_required_opportunities(db, await season_start_utc(db))
     ]
+    season_start = await get_season_start(db)
     return templates.TemplateResponse(
         "admin/report.html",
         {
@@ -1221,6 +1222,7 @@ async def admin_report(
             "current_level": level_filter.value if level_filter else "",
             "met_count": met,
             "required_opportunity_names": required_opportunity_names,
+            "season_start": season_start,
         },
     )
 

@@ -212,9 +212,11 @@ exportable as CSV.
 The per-student detail CSV is `/admin/report/archived/students/{id}/export`, parsing
 `date_from`/`date_to` exactly like its HTML twin so the button is just the page URL +
 `/export` + the same query string. It lists every status (the page's list does too; only
-its *total* is approved-only). Linked from single-student surfaces only — the detail page
-and the report modal's header link (all-time); the student search page deliberately has no
-export.
+its *total* is approved-only). Linked from single-student surfaces only: the detail page
+(all-time by default, following the page's own date filter) and the report modal's header
+link, which instead defaults `date_from` to `season_start` (the season window) when a
+cutoff is configured — a template-side default on that one link, not a change to the
+export route itself. The student search page deliberately has no export.
 
 ### Database migrations
 No Alembic. Add a `def _migration(conn)` guarded by `inspect(conn)` in `database.py` and
