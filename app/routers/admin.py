@@ -268,12 +268,10 @@ async def admin_roster(request: Request, db: AsyncSession = Depends(get_db)):
     # One combined table (students + mentors) — Role is now just another Excel-style
     # column filter, replacing the old Students/Mentors tabs.
     members = [
-        {"role": "Student", "person": s, "name": s.name, "level": s.level,
-         "grade": s.grade, "team_number": s.team_number}
+        {"role": "Student", "name": s.name, "level": s.level, "team_number": s.team_number}
         for s in students
     ] + [
-        {"role": "Mentor", "person": m, "name": m.name, "level": None,
-         "grade": None, "team_number": None}
+        {"role": "Mentor", "name": m.name, "level": None, "team_number": None}
         for m in mentors
     ]
     members.sort(key=lambda r: r["name"].lower())
