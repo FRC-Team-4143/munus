@@ -33,6 +33,55 @@ pytest
 In-memory SQLite with async fixtures via `pytest-asyncio`. **Do not mock the database** —
 tests hit a real (in-memory) DB to catch query bugs.
 
+## Manual / visual verification (screenshots)
+
+This sandboxed environment has no seeded dev database and blocks outbound access to
+`cdn.jsdelivr.net` (Bootstrap/Bootstrap Icons) — check `curl -sS
+$HTTPS_PROXY/__agentproxy/status` if requests through it fail; a `connect_rejected` for
+that host is a policy denial, not a bug. Getting an actual screenshot of an admin page
+(Playwright's Chromium is pre-installed at `/opt/pw-browsers/chromium`; `pip install
+playwright` into the venv if the Python package isn't there yet) needs a few workarounds:
+
+1. **Local Bootstrap assets, served via Playwright route interception** —
+   `registry.npmjs.org` *is* reachable. Download once:
+   ```bash
+   mkdir -p /tmp/cdn_assets && cd /tmp/cdn_assets
+   curl -sSL https://registry.npmjs.org/bootstrap/-/bootstrap-5.3.3.tgz | tar xz
+   curl -sSL https://registry.npmjs.org/bootstrap-icons/-/bootstrap-icons-1.11.3.tgz | tar xz
+   ```
+   (both extract into `package/` and merge — `dist/css`, `dist/js`, and `font/` all end
+   up under the same directory). In the Playwright script, `context.route(re.compile(r"cdn\.jsdelivr\.net"),
+   handler)` and `route.fulfill(...)` the CSS/JS/`.woff`/`.woff2` requests from those
+   local files. Skipping this makes every page render unstyled (no dark theme, no
+   icons) even though the HTML/JS is completely correct — don't mistake that for a
+   real bug.
+
+2. **A seeded temp DB** — point `DATABASE_URL` at a scratch sqlite file
+   (`sqlite+aiosqlite:////tmp/munus_demo.db`) and run a short script, with
+   `PYTHONPATH=/home/user/munus` (a bare `python script.py` doesn't put the repo root
+   on `sys.path`), that calls `Base.metadata.create_all` and inserts a few rows.
+
+3. **A valid `mw_sso` cookie, minted directly** — no need to walk the real SSO flow:
+   ```python
+   from itsdangerous import URLSafeTimedSerializer
+   signer = URLSafeTimedSerializer("<same secret as SSO_SECRET below>", salt="mw-sso")
+   cookie = signer.dumps({"member_code": "test0001", "username": "test.admin",
+       "name": "Test Admin", "role": "mentor", "team_number": 4143,
+       "groups": ["munus-admin"], "slack_user_id": None})
+   ```
+   `services/sso.py` builds its `itsdangerous` signer **at import time** from
+   `settings.sso_secret` — mutating `settings.sso_secret` after the app/server has
+   already started has no effect. Set `SSO_SECRET` in the server process's own
+   environment *before* it starts, not by patching the already-imported `settings`
+   object in-process.
+
+4. **Run and drive it**: `DATABASE_URL=... SSO_SECRET=... uvicorn app.main:app --port
+   8001` in the background, then Playwright `add_cookies([{"name": "mw_sso", "value":
+   cookie, "domain": "127.0.0.1", "path": "/"}])` before navigating. Talk to
+   `127.0.0.1` directly, not `localhost`, and don't route local traffic through the
+   session's `HTTPS_PROXY` — a plain-HTTP request through it 405s ("non-CONNECT
+   request"); only the CDN-lookalike requests in step 1 need interception.
+
 ## Project Layout
 
 ```

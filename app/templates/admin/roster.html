@@ -2,6 +2,43 @@
 {% set active_page = "roster" %}
 {% block title %}Roster — Munus Admin{% endblock %}
 
+{% block head %}
+<style>
+  .fs-th { white-space: nowrap; }
+  .fs-th .th-inner { gap: .35rem; }
+  .sort-icon { font-size: .75rem; cursor: pointer; }
+  .table-responsive { min-height: 360px; }
+  .filter-funnel-btn {
+    border: none;
+    background: none;
+    padding: 0 .15rem;
+    line-height: 1;
+    min-width: 1em;
+    min-height: 1em;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #9a7878;
+    cursor: pointer;
+  }
+  .filter-funnel-btn:hover, .filter-funnel-btn.active { color: #e05540; }
+  .filter-dropdown-menu {
+    min-width: 220px;
+    max-width: 280px;
+    background: #111111;
+    border: 1px solid #2a1a1a;
+  }
+  .filter-checkbox-list {
+    max-height: 240px;
+    overflow-y: auto;
+    margin-bottom: .25rem;
+  }
+  .filter-dropdown-menu .form-check-label { color: #f0e8e8; }
+  .filter-dropdown-menu a.small { color: #e05540; text-decoration: none; }
+  .filter-dropdown-menu a.small:hover { text-decoration: underline; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
   <h2 class="mb-0">Roster</h2>
@@ -32,60 +69,40 @@
 <div class="alert alert-danger py-2">Sync failed: {{ sync_error }}</div>
 {% endif %}
 
-<ul class="nav nav-tabs mb-3" role="tablist">
-  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#students-tab">Students ({{ students|length }})</button></li>
-  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#mentors-tab">Mentors ({{ mentors|length }})</button></li>
-</ul>
+<p class="text-muted small mb-2">{{ members|length }} member{{ 's' if members|length != 1 else '' }}</p>
 
-<div class="tab-content">
-  <div class="tab-pane fade show active" id="students-tab">
-    <div class="card">
-      <div class="card-body p-0">
-        <div class="table-responsive">
-        <table class="table table-hover mb-0 align-middle">
-          <thead class="table-light">
-            <tr><th>Name</th><th>Level</th><th>Grade</th><th>Team</th><th>Slack</th><th>Linked</th></tr>
-          </thead>
-          <tbody>
-            {% for s in students %}
-            <tr>
-              <td>{{ s.name }}</td>
-              <td>{{ s.level | levellabel }}</td>
-              <td>{{ s.grade or '—' }}</td>
-              <td>{{ s.team_number or '—' }}</td>
-              <td>{{ '✓' if s.slack_user_id else '—' }}</td>
-              <td>{% if s.member_code %}<span class="badge bg-success">Legion</span>{% else %}<span class="badge bg-secondary">legacy</span>{% endif %}</td>
-            </tr>
-            {% else %}
-            <tr><td colspan="6" class="text-muted text-center">No students. Run a sync.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="tab-pane fade" id="mentors-tab">
-    <div class="card">
-      <div class="card-body p-0">
-        <div class="table-responsive">
-        <table class="table table-hover mb-0 align-middle">
-          <thead class="table-light"><tr><th>Name</th><th>Slack</th><th>Linked</th></tr></thead>
-          <tbody>
-            {% for m in mentors %}
-            <tr>
-              <td>{{ m.name }}</td>
-              <td>{{ '✓' if m.slack_user_id else '—' }}</td>
-              <td>{% if m.member_code %}<span class="badge bg-success">Legion</span>{% else %}<span class="badge bg-secondary">legacy</span>{% endif %}</td>
-            </tr>
-            {% else %}
-            <tr><td colspan="3" class="text-muted text-center">No mentors. Run a sync.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        </div>
-      </div>
-    </div>
-  </div>
+<div class="table-responsive">
+  <table class="table table-hover mb-0 align-middle" data-filter-sort data-empty-text="No members match the current filters.">
+    <thead class="table-light">
+      <tr>
+        <th class="fs-th" data-col="name" data-sortable="true" data-sort-type="text" data-filter="none">
+          <span class="th-inner d-inline-flex align-items-center"><span class="th-label">Name</span></span>
+        </th>
+        <th class="fs-th" data-col="role">
+          <span class="th-inner d-inline-flex align-items-center"><span class="th-label">Role</span></span>
+        </th>
+        <th class="fs-th" data-col="level" data-sortable="true" data-sort-type="text">
+          <span class="th-inner d-inline-flex align-items-center"><span class="th-label">Level</span></span>
+        </th>
+        <th class="fs-th" data-col="team" data-sortable="true" data-sort-type="num">
+          <span class="th-inner d-inline-flex align-items-center"><span class="th-label">Team</span></span>
+        </th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in members %}
+      <tr>
+        <td data-value="{{ row.name }}">{{ row.name }}</td>
+        <td data-value="{{ row.role }}">{{ row.role }}</td>
+        <td data-value="{{ row.level.value if row.level else '' }}" data-label="{{ row.level | levellabel if row.level else '' }}">{{ row.level | levellabel if row.level else '—' }}</td>
+        <td data-value="{{ row.team_number or '' }}">{{ row.team_number or '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="text-muted text-center">No members. Run a sync.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </div>
 {% endblock %}
+
+{% block scripts %}<script src="/static/js/table-filter-sort.js" defer></script>{% endblock %}

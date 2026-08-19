@@ -259,16 +259,28 @@ async def admin_roster(request: Request, db: AsyncSession = Depends(get_db)):
 
     student_q = select(Student).where(Student.is_active.is_(True)).order_by(Student.name)
     mentor_q = select(Mentor).where(Mentor.is_active.is_(True)).order_by(Mentor.name)
+    students = (await db.execute(student_q)).scalars().all()
+    mentors = (await db.execute(mentor_q)).scalars().all()
 
     from app.services.app_settings import LEGION_LAST_SYNCED_KEY, get_setting
     last_synced = await get_setting(db, LEGION_LAST_SYNCED_KEY)
+
+    # One combined table (students + mentors) — Role is now just another Excel-style
+    # column filter, replacing the old Students/Mentors tabs.
+    members = [
+        {"role": "Student", "name": s.name, "level": s.level, "team_number": s.team_number}
+        for s in students
+    ] + [
+        {"role": "Mentor", "name": m.name, "level": None, "team_number": None}
+        for m in mentors
+    ]
+    members.sort(key=lambda r: r["name"].lower())
 
     return templates.TemplateResponse(
         "admin/roster.html",
         {
             "request": request,
-            "students": (await db.execute(student_q)).scalars().all(),
-            "mentors": (await db.execute(mentor_q)).scalars().all(),
+            "members": members,
             "last_synced": last_synced,
             "synced": request.query_params.get("synced"),
             "sync_error": request.query_params.get("sync_error"),
@@ -716,9 +728,11 @@ async def admin_signup_remove(
 # ── Submissions ────────────────────────────────────────────────────────────────
 
 @router.get("/submissions", response_class=HTMLResponse)
-async def admin_submissions_list(
-    request: Request, status: Optional[str] = None, db: AsyncSession = Depends(get_db)
-):
+async def admin_submissions_list(request: Request, db: AsyncSession = Depends(get_db)):
+    """Status/Opportunity/Reviewer filtering on this page is client-side (Excel-style
+    column filters, see static/js/table-filter-sort.js) — there's no pagination and no
+    other route depends on a `status` query param, so the old reload-based status
+    <select> was dropped entirely rather than kept alongside the column funnel."""
     if redirect := _require_auth(request):
         return redirect
 
@@ -731,12 +745,6 @@ async def admin_submissions_list(
         )
         .order_by(HourSubmission.submitted_at.desc())
     )
-    try:
-        status_filter = SubmissionStatus(status) if status else None
-    except ValueError:
-        status_filter = None
-    if status_filter:
-        q = q.where(HourSubmission.status == status_filter)
     subs = (await db.execute(q)).scalars().all()
 
     return templates.TemplateResponse(
@@ -744,8 +752,6 @@ async def admin_submissions_list(
         {
             "request": request,
             "submissions": subs,
-            "statuses": list(SubmissionStatus),
-            "current_status": status_filter.value if status_filter else "",
         },
     )
 
