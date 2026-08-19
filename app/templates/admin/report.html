@@ -13,11 +13,37 @@
   /* Projected (upcoming-shift) hours: distinct color + stripes so it reads clearly
      apart from the solid green "approved" hours. */
   .progress-bar.bar-projected { background-color: #7b6cf6; }
-  /* Click-to-sort column headers with a direction indicator. */
-  .report-table th.sortable { cursor: pointer; user-select: none; }
-  .report-table th.sortable::after { content: "\2195"; opacity: .55; margin-left: .4em; font-size: 1.2em; }
-  .report-table th.sort-asc::after { content: "\25B2"; opacity: 1; font-size: .9em; color: #e05540; }
-  .report-table th.sort-desc::after { content: "\25BC"; opacity: 1; font-size: .9em; color: #e05540; }
+  .fs-th .th-inner { gap: .35rem; }
+  .sort-icon { font-size: .75rem; cursor: pointer; }
+  .card-body { min-height: 360px; }
+  .filter-funnel-btn {
+    border: none;
+    background: none;
+    padding: 0 .15rem;
+    line-height: 1;
+    min-width: 1em;
+    min-height: 1em;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #9a7878;
+    cursor: pointer;
+  }
+  .filter-funnel-btn:hover, .filter-funnel-btn.active { color: #e05540; }
+  .filter-dropdown-menu {
+    min-width: 220px;
+    max-width: 280px;
+    background: #111111;
+    border: 1px solid #2a1a1a;
+  }
+  .filter-checkbox-list {
+    max-height: 240px;
+    overflow-y: auto;
+    margin-bottom: .25rem;
+  }
+  .filter-dropdown-menu .form-check-label { color: #f0e8e8; }
+  .filter-dropdown-menu a.small { color: #e05540; text-decoration: none; }
+  .filter-dropdown-menu a.small:hover { text-decoration: underline; }
 </style>
 {% endblock %}
 
@@ -121,38 +147,43 @@
     </span>
   </div>
   <div class="card-body p-0" style="overflow-x: auto;">
-    <table class="table table-hover mb-0 report-table">
+    <table class="table table-hover mb-0 report-table" data-filter-sort data-empty-text="No students match the current filters.">
+      {% macro fs_th(label, col, sortable=false, sort_type='text', filterable=true, extra_class='') %}
+      <th class="fs-th {{ extra_class }}" data-col="{{ col }}"{% if sortable %} data-sortable="true" data-sort-type="{{ sort_type }}"{% endif %}{% if not filterable %} data-filter="none"{% endif %}>
+        <span class="th-inner d-inline-flex align-items-center"><span class="th-label">{{ label }}</span></span>
+      </th>
+      {% endmacro %}
       <thead class="table-light">
         <tr>
-          <th class="sortable" data-type="text">Student</th>
-          <th class="sortable" data-type="text">Level</th>
-          <th class="text-end sortable" data-type="num">Approved</th>
-          <th class="text-end sortable" data-type="num">Projected</th>
-          <th class="text-end sortable" data-type="num">Required</th>
+          {{ fs_th('Student', 'student', sortable=true, filterable=false) }}
+          {{ fs_th('Level', 'level', sortable=true) }}
+          {{ fs_th('Approved', 'approved', sortable=true, sort_type='num', filterable=false, extra_class='text-end') }}
+          {{ fs_th('Projected', 'projected', sortable=true, sort_type='num', filterable=false, extra_class='text-end') }}
+          {{ fs_th('Required', 'required', sortable=true, sort_type='num', filterable=false, extra_class='text-end') }}
           <th>Progress</th>
           <th class="text-center">Pending</th>
           <th class="text-center">Upcoming</th>
-          <th class="text-center sortable" data-type="num">Required Opps</th>
-          <th class="text-center sortable" data-type="num">Met</th>
+          {{ fs_th('Required Opps', 'reqopps', sortable=true, sort_type='num', filterable=false, extra_class='text-center') }}
+          {{ fs_th('Met', 'met', sortable=true, sort_type='num', filterable=false, extra_class='text-center') }}
         </tr>
       </thead>
       <tbody>
         {% for r in rows %}
         <tr>
-          <td data-sort="{{ r.student.name }}">
+          <td data-value="{{ r.student.name }}">
             <button type="button" class="btn btn-link p-0 align-baseline" data-bs-toggle="modal"
                     data-bs-target="#studentSubsModal" data-student-id="{{ r.student.id }}" data-student-name="{{ r.student.name }}">
               {{ r.student.name }}
             </button>
             {% if not r.student.is_active %}<span class="badge bg-secondary ms-1">Archived</span>{% endif %}
           </td>
-          <td class="text-muted" data-sort="{{ r.student.level | levellabel }}">{{ r.student.level | levellabel }}</td>
-          <td class="text-end fw-semibold" data-sort="{{ r.approved }}">{{ '%.2f' % r.approved }}</td>
-          <td class="text-end" data-sort="{{ r.projected }}">
+          <td class="text-muted" data-value="{{ r.student.level.value if r.student.level else '' }}" data-label="{{ r.student.level | levellabel }}">{{ r.student.level | levellabel }}</td>
+          <td class="text-end fw-semibold" data-value="{{ r.approved }}">{{ '%.2f' % r.approved }}</td>
+          <td class="text-end" data-value="{{ r.projected }}">
             {{ '%.2f' % r.projected }}{% if r.projected > r.approved %}<i class="bi bi-arrow-up-short text-success"></i>{% endif %}
           </td>
-          <td class="text-end text-muted" data-sort="{{ r.required }}">{{ '%.2f' % r.required }}</td>
-          <td data-sort="{{ r.pct }}">
+          <td class="text-end text-muted" data-value="{{ r.required }}">{{ '%.2f' % r.required }}</td>
+          <td>
             <div class="progress mini-progress" title="{{ r.pct }}% approved · {{ r.projected_pct }}% projected">
               <div class="progress-bar bg-success" style="width: {{ r.pct }}%;"></div>
               {% if r.projected_pct > r.pct %}
@@ -160,16 +191,16 @@
               {% endif %}
             </div>
           </td>
-          <td class="text-center" data-sort="{{ r.pending_count }}">{% if r.pending_count %}<span class="badge bg-warning text-dark">{{ r.pending_count }}</span>{% else %}—{% endif %}</td>
-          <td class="text-center" data-sort="{{ r.upcoming_count }}">{% if r.upcoming_count %}<span class="badge bg-secondary">{{ r.upcoming_count }}</span>{% else %}—{% endif %}</td>
-          <td class="text-center" data-sort="{{ r.missing_required|length }}">
+          <td class="text-center">{% if r.pending_count %}<span class="badge bg-warning text-dark">{{ r.pending_count }}</span>{% else %}—{% endif %}</td>
+          <td class="text-center">{% if r.upcoming_count %}<span class="badge bg-secondary">{{ r.upcoming_count }}</span>{% else %}—{% endif %}</td>
+          <td class="text-center" data-value="{{ r.missing_required|length }}">
             {% if r.missing_required %}
             <span class="badge bg-danger" title="Missing: {{ r.missing_required|join(', ') }}">{{ r.missing_required|length }} missing</span>
             {% else %}
             <i class="bi bi-check-circle-fill text-success" title="All required opportunities complete"></i>
             {% endif %}
           </td>
-          <td class="text-center" data-sort="{{ r.remaining if not r.met else 0 }}">
+          <td class="text-center" data-value="{{ r.remaining if not r.met else 0 }}">
             {% if r.met %}<i class="bi bi-check-circle-fill text-success"></i>{% else %}<span class="text-warning">{{ '%.2f' % r.remaining }}h</span>{% endif %}
           </td>
         </tr>
@@ -233,33 +264,8 @@
       bodyEl.innerHTML = LOADING_HTML;
     });
   })();
-
-  // Click a column header to sort the table by that column; click again to reverse.
-  document.querySelectorAll('.report-table th.sortable').forEach(function (th) {
-    th.addEventListener('click', function () {
-      var table = th.closest('table');
-      var tbody = table.querySelector('tbody');
-      var idx = Array.prototype.indexOf.call(th.parentNode.children, th);
-      var numeric = th.dataset.type === 'num';
-      var asc = !th.classList.contains('sort-asc');
-
-      table.querySelectorAll('th.sortable').forEach(function (h) {
-        h.classList.remove('sort-asc', 'sort-desc');
-      });
-      th.classList.add(asc ? 'sort-asc' : 'sort-desc');
-
-      var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr'));
-      rows.sort(function (a, b) {
-        var av = a.children[idx].dataset.sort || '';
-        var bv = b.children[idx].dataset.sort || '';
-        var cmp = numeric
-          ? (parseFloat(av) || 0) - (parseFloat(bv) || 0)
-          : av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' });
-        return asc ? cmp : -cmp;
-      });
-      rows.forEach(function (r) { tbody.appendChild(r); });
-    });
-  });
 </script>
 {% endif %}
 {% endblock %}
+
+{% block scripts %}<script src="/static/js/table-filter-sort.js" defer></script>{% endblock %}
