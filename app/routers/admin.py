@@ -728,9 +728,11 @@ async def admin_signup_remove(
 # ── Submissions ────────────────────────────────────────────────────────────────
 
 @router.get("/submissions", response_class=HTMLResponse)
-async def admin_submissions_list(
-    request: Request, status: Optional[str] = None, db: AsyncSession = Depends(get_db)
-):
+async def admin_submissions_list(request: Request, db: AsyncSession = Depends(get_db)):
+    """Status/Opportunity/Reviewer filtering on this page is client-side (Excel-style
+    column filters, see static/js/table-filter-sort.js) — there's no pagination and no
+    other route depends on a `status` query param, so the old reload-based status
+    <select> was dropped entirely rather than kept alongside the column funnel."""
     if redirect := _require_auth(request):
         return redirect
 
@@ -743,12 +745,6 @@ async def admin_submissions_list(
         )
         .order_by(HourSubmission.submitted_at.desc())
     )
-    try:
-        status_filter = SubmissionStatus(status) if status else None
-    except ValueError:
-        status_filter = None
-    if status_filter:
-        q = q.where(HourSubmission.status == status_filter)
     subs = (await db.execute(q)).scalars().all()
 
     return templates.TemplateResponse(
@@ -756,8 +752,6 @@ async def admin_submissions_list(
         {
             "request": request,
             "submissions": subs,
-            "statuses": list(SubmissionStatus),
-            "current_status": status_filter.value if status_filter else "",
         },
     )
 
