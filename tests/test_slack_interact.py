@@ -359,6 +359,18 @@ async def test_review_hours_modal_bad_hours_returns_errors(
 # no message, no browser, no sign-in.
 
 
+def _shift_picker(view: dict) -> dict:
+    """The shift `static_select`, addressed by block_id rather than position — the modal
+    grows blocks (details, notice, the full-details link) around it."""
+    block = next(b for b in view["blocks"] if b.get("block_id") == "shift")
+    return block["element"]
+
+
+def _modal_text(view: dict) -> str:
+    """Every section's text in one string, for asserting on wording."""
+    return "\n".join(b["text"]["text"] for b in view["blocks"] if b["type"] == "section")
+
+
 def _view_payload(slack_id: str, opp_id: int, trigger_id: str = "t") -> dict:
     return {
         "type": "block_actions",
@@ -400,7 +412,7 @@ async def test_view_button_opens_a_modal_and_posts_nothing(
     (view,) = capture_modal
     assert view["callback_id"] == "opportunity_signup"
     assert view["private_metadata"] == str(opp.id)
-    options = view["blocks"][-1]["element"]["options"]
+    options = _shift_picker(view)["options"]
     assert [o["value"] for o in options] == [str(shift.id)]
     assert view["submit"]["text"] == "Sign up"
 
@@ -420,9 +432,7 @@ async def test_modal_marks_full_and_already_signed_up_shifts(
     await _interact(client, _view_payload("U0STU", opp.id))
 
     (view,) = capture_modal
-    labels = {
-        o["value"]: o["text"]["text"] for o in view["blocks"][-1]["element"]["options"]
-    }
+    labels = {o["value"]: o["text"]["text"] for o in _shift_picker(view)["options"]}
     assert "signed up" in labels[str(joined.id)]
     assert "FULL" in labels[str(full.id)]
 
@@ -439,7 +449,7 @@ async def test_modal_for_a_mentor_is_read_only(
 
     (view,) = capture_modal
     assert "submit" not in view
-    assert "Mentors don't sign up" in view["blocks"][-1]["text"]["text"]
+    assert "Mentors don't sign up" in _modal_text(view)
 
 
 async def test_modal_for_a_continuous_opportunity_has_no_shift_picker(
@@ -452,7 +462,7 @@ async def test_modal_for_a_continuous_opportunity_has_no_shift_picker(
 
     (view,) = capture_modal
     assert "submit" not in view
-    assert "ongoing opportunity" in view["blocks"][-1]["text"]["text"]
+    assert "ongoing opportunity" in _modal_text(view)
 
 
 async def test_modal_tells_an_unlinked_user_why(
@@ -465,7 +475,7 @@ async def test_modal_tells_an_unlinked_user_why(
 
     (view,) = capture_modal
     assert "submit" not in view
-    assert "isn't linked" in view["blocks"][-1]["text"]["text"]
+    assert "isn't linked" in _modal_text(view)
 
 
 async def test_submitting_the_modal_signs_the_student_up(
@@ -530,3 +540,48 @@ async def test_submitting_without_picking_a_shift_errors(
     resp = await _interact(client, _submit_payload("U0STU", opp.id, None))
 
     assert resp.json()["response_action"] == "errors"
+
+
+async def test_modal_carries_a_per_person_link_to_the_full_page(
+    client, capture_modal, make_student, make_opportunity, make_shift
+):
+    """The modal links out for what it can't hold — the roster, cancelling a signup.
+    Safe as a magic link here (unlike in the announcement it came from) because a modal
+    is opened by and shown to exactly one person."""
+    student = await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity()
+    await make_shift(opp.id, start_in_hours=24)
+
+    await _interact(client, _view_payload("U0STU", opp.id))
+
+    (view,) = capture_modal
+    (payload,) = magic_link_payloads(_modal_text(view))
+    assert payload["member_code"] == student.member_code
+    assert payload["return_to"].endswith(f"/opportunities/{opp.id}")
+
+
+async def test_mentor_modal_links_as_the_mentor_themselves(
+    client, capture_modal, make_mentor, make_opportunity, make_shift
+):
+    mentor = await make_mentor(slack="U0MENTOR", code="mnt00001")
+    opp = await make_opportunity()
+    await make_shift(opp.id, start_in_hours=24)
+
+    await _interact(client, _view_payload("U0MENTOR", opp.id))
+
+    (view,) = capture_modal
+    (payload,) = magic_link_payloads(_modal_text(view))
+    assert payload["member_code"] == mentor.member_code
+
+
+async def test_unlinked_user_gets_no_link(client, capture_modal, make_opportunity, make_shift):
+    """No member to sign in as — offering a link would be a dead end, and there's no
+    one to mint it for."""
+    opp = await make_opportunity()
+    await make_shift(opp.id, start_in_hours=24)
+
+    await _interact(client, _view_payload("U0NOBODY", opp.id))
+
+    (view,) = capture_modal
+    assert magic_link_payloads(_modal_text(view)) == []
+    assert "/sso/link" not in _modal_text(view)

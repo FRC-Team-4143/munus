@@ -229,7 +229,11 @@ def _shift_option(row: dict) -> dict:
 
 
 def opportunity_signup_modal(
-    opp: Opportunity, shift_rows: Optional[list[dict]], *, notice: Optional[str] = None
+    opp: Opportunity,
+    shift_rows: Optional[list[dict]],
+    *,
+    notice: Optional[str] = None,
+    details_url: Optional[str] = None,
 ) -> dict:
     """The modal behind the announcement's "🙋 View & sign up" button.
 
@@ -242,6 +246,14 @@ def opportunity_signup_modal(
     `notice` renders instead of the shift picker and suppresses the submit button, for
     the cases where there's nothing to sign up for: a continuous opportunity, one with
     no upcoming shifts, or a mentor (a read-only viewer here, same as on the web).
+
+    `details_url` links out to the full opportunity page, for what the modal can't hold:
+    who else is signed up, cancelling a signup, and logging hours on a continuous
+    opportunity. It's a per-person magic link, which is safe *here* for the same reason
+    it isn't in the announcement — a modal is opened by and shown to exactly one person.
+    Rendered as a section link rather than a `url` button on purpose: Slack sends an
+    interaction payload for url buttons that has to be acked, and a plain link needs our
+    server not at all.
     """
     blocks: list[dict] = []
     details = []
@@ -271,6 +283,15 @@ def opportunity_signup_modal(
                 "action_id": "value",
                 "placeholder": {"type": "plain_text", "text": "Choose a shift"},
                 "options": [_shift_option(r) for r in shift_rows or []],
+            },
+        })
+
+    if details_url:
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"<{details_url}|🔗 Full details, and who else is signed up>",
             },
         })
 

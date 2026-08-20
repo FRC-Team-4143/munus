@@ -24,6 +24,7 @@ from app.models import (
     SubmissionStatus,
 )
 from app.services import audit, opportunities as opp_service, submissions
+from app.services.legion_auth import make_link_url
 from app.services.reports import mentor_vhours_message, student_vhours_message
 from app.services.slack_client import open_modal, send_dm
 from app.utils import shift_length_hours
@@ -271,6 +272,7 @@ async def _handle_opportunity_view(
 
     notice = None
     shift_rows = None
+    member_code = student.member_code if student is not None else None
     if student is None:
         mentor = (
             await db.execute(
@@ -287,6 +289,7 @@ async def _handle_opportunity_view(
             else ("❌ Your Slack account isn't linked to a Munus student record yet. "
                   "Please ask an admin to link it.")
         )
+        member_code = mentor.member_code if mentor is not None else None
     elif opp.is_continuous:
         notice = "_This is an ongoing opportunity — no shifts to sign up for. Just log your hours when you've helped._"
     else:
@@ -294,8 +297,18 @@ async def _handle_opportunity_view(
         if not shift_rows:
             notice = "_No upcoming shifts on this opportunity right now._"
 
+    # A per-person magic link is safe in a modal — unlike the announcement it came from,
+    # a modal is shown to exactly the one person who opened it. Omitted for an unlinked
+    # caller, who has no member to sign in as.
+    details_url = (
+        make_link_url(member_code, f"/opportunities/{opp.id}") if member_code else None
+    )
+
     await open_modal(
-        trigger_id, opp_service.opportunity_signup_modal(opp, shift_rows, notice=notice)
+        trigger_id,
+        opp_service.opportunity_signup_modal(
+            opp, shift_rows, notice=notice, details_url=details_url
+        ),
     )
     return Response(status_code=200)
 
