@@ -64,6 +64,40 @@ async def _verify_slack_signature(request: Request) -> bytes:
     return body
 
 
+async def _handle_munus_command(db: AsyncSession, user_id: str) -> JSONResponse | Response:
+    """/munus — a bare one-tap link to Munus, no stats (mirrors Tempus's /tempus and
+    Legion's /legion). Munus's /me is student-only (mentors have no personal dashboard —
+    see legion/app/services/home.py's tiles_for), so a mentor lands on /opportunities
+    instead, matching the home-page launcher's own tile for mentors."""
+    student = (
+        await db.execute(
+            select(Student).where(Student.slack_user_id == user_id, Student.is_active.is_(True))
+        )
+    ).scalars().first()
+    member_code = student.member_code if student else None
+    next_path = "/me"
+    if member_code is None:
+        mentor = (
+            await db.execute(
+                select(Mentor).where(Mentor.slack_user_id == user_id, Mentor.is_active.is_(True))
+            )
+        ).scalars().first()
+        if mentor is not None:
+            member_code = mentor.member_code
+            next_path = "/opportunities"
+    if member_code is None:
+        return Response(
+            content="❌ Your Slack account isn't linked to a Munus record. Please ask an admin.",
+            media_type="text/plain",
+        )
+    link = f"<{make_link_url(member_code, next_path)}|❤️ Open Munus>"
+    return JSONResponse({
+        "response_type": "ephemeral",
+        "text": link,
+        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": link}}],
+    })
+
+
 # ── Slash command router ───────────────────────────────────────────────────────
 
 @router.post("/command")
@@ -77,8 +111,11 @@ async def slack_command(
     command = form.get("command", "")
     user_id = form.get("user_id", "")
 
-    if command != "/vhours":
+    if command not in ("/vhours", "/munus"):
         return Response(content="Unknown command.", media_type="text/plain")
+
+    if command == "/munus":
+        return await _handle_munus_command(db, user_id)
 
     student = (
         await db.execute(

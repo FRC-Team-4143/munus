@@ -91,3 +91,52 @@ async def test_vhours_bad_signature_rejected(client):
     headers["X-Slack-Signature"] = "v0=deadbeef"
     resp = await client.post("/slack/command", content=body, headers=headers)
     assert resp.status_code == 403
+
+
+# ── /munus — bare one-tap link, no stats (mirrors /tempus, /legion) ────────────
+
+async def _post_munus(client, user_id: str):
+    body = urlencode({"command": "/munus", "user_id": user_id})
+    return await client.post("/slack/command", content=body, headers=_signed_headers(body))
+
+
+async def test_munus_command_links_a_student_to_me(client, make_student):
+    student = await make_student(level=StudentLevel.freshman, slack="U0STUDENT")
+
+    resp = await _post_munus(client, "U0STUDENT")
+
+    assert resp.status_code == 200
+    assert any(
+        p["member_code"] == student.member_code and p["return_to"].endswith("/me")
+        for p in magic_link_payloads(resp.text)
+    )
+
+
+async def test_munus_command_links_a_mentor_to_opportunities(client, make_mentor):
+    """Munus's /me is student-only — a mentor gets /opportunities instead, matching
+    the home-page launcher's own tile for mentors (legion/app/services/home.py)."""
+    mentor = await make_mentor(slack="U0MENTOR", code="deadbeef")
+
+    resp = await _post_munus(client, "U0MENTOR")
+
+    assert resp.status_code == 200
+    assert any(
+        p["member_code"] == mentor.member_code and p["return_to"].endswith("/opportunities")
+        for p in magic_link_payloads(resp.text)
+    )
+
+
+async def test_munus_command_tells_an_unlinked_user_why(client):
+    resp = await _post_munus(client, "U0NOBODY")
+
+    assert resp.status_code == 200
+    assert "isn't linked" in resp.text
+    assert magic_link_payloads(resp.text) == []
+
+
+async def test_munus_command_bad_signature_rejected(client):
+    body = urlencode({"command": "/munus", "user_id": "U0STUDENT"})
+    headers = _signed_headers(body)
+    headers["X-Slack-Signature"] = "v0=deadbeef"
+    resp = await client.post("/slack/command", content=body, headers=headers)
+    assert resp.status_code == 403

@@ -108,7 +108,8 @@ Pushing to `main` automatically deploys via GitHub Actions (tests must pass firs
    the same app shared with Tempus and Legion** (see the note below), but the steps to
    create one from scratch are the same either way.
 2. **OAuth & Permissions** → add bot scopes: `chat:write`, `im:write`, `commands`
-3. **Slash Commands** → add `/vhours` → `https://<host>/slack/command`
+3. **Slash Commands** → add `/vhours` → `https://<host>/slack/command`, plus `/munus`
+   (same URL) for a bare one-tap link to Munus — no stats, just the link
 4. **Interactivity & Shortcuts** → Request URL `https://<host>/slack/interact` — see
    the note below if this app is shared with the sibling apps.
 5. Install to the workspace; copy the Bot Token and Signing Secret into `.env`

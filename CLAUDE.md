@@ -3,8 +3,9 @@
 Volunteer-hour tracker for FRC teams 4143 (MARS/WARS) and 4423 (MARS' Minions).
 Students browse volunteer **opportunities**, sign up for dated **shifts**, and submit
 **hours** that a mentor approves. Season requirements are driven by student **level**.
-FastAPI + SQLAlchemy (async) + Jinja2 + SQLite. Slack integration for `/vhours` and
-interactive Approve/Reject of submissions.
+FastAPI + SQLAlchemy (async) + Jinja2 + SQLite. Slack integration for `/vhours`,
+`/munus` (a bare one-tap dashboard link), and interactive Approve/Reject of
+submissions.
 
 Sibling app to **Tempus** (attendance/hours kiosk) and **Legion** (shared roster + SSO
 provider), and intentionally mirrors Tempus's stack and dark styling — but is a fully
