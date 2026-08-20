@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 
 from app.config import settings
 from app.models import HourSubmission, StudentLevel, SubmissionStatus
+from tests.conftest import magic_link_payloads
 
 
 def _signed_headers(body: str) -> dict:
@@ -35,9 +36,12 @@ async def test_vhours_for_linked_student(client, db, make_student):
     # Freshman requirement default is 5.0; 3 approved hrs -> not yet met.
     assert "3.00 / 5.00" in resp.text
     assert "still needed" in resp.text
-    # Ephemeral response carries a one-tap sign-in link to the dashboard, keyed on the
-    # student's Legion member_code (no Legion round trip happens until it's clicked).
-    assert f"/enter?member={student.member_code}" in resp.text
+    # Ephemeral response carries a one-tap magic link to the dashboard. Signed rather
+    # than keyed on a bare member_code, so the tap needs no Approve/Deny round trip —
+    # safe here precisely because an ephemeral reply is visible to this student alone.
+    assert any(
+        p["member_code"] == student.member_code for p in magic_link_payloads(resp.text)
+    )
 
 
 async def test_vhours_lists_only_upcoming_shifts(client, db, make_student, make_opportunity, make_shift):
@@ -73,9 +77,12 @@ async def test_vhours_for_mentor_links_to_opportunities(client, make_mentor):
     resp = await _post_vhours(client, "U0MENTOR")
     assert resp.status_code == 200
     assert "nothing to report" in resp.text
-    # One-tap sign-in link keyed on the mentor's own member_code, pointed at the
-    # opportunities list rather than a student dashboard.
-    assert f"/enter?member={mentor.member_code}&next=/opportunities" in resp.text
+    # One-tap magic link for the mentor themselves, pointed at the opportunities list
+    # rather than a student dashboard.
+    assert any(
+        p["member_code"] == mentor.member_code and p["return_to"].endswith("/opportunities")
+        for p in magic_link_payloads(resp.text)
+    )
 
 
 async def test_vhours_bad_signature_rejected(client):

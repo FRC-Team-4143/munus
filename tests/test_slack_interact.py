@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.models import HourSubmission, Signup, SignupStatus, SubmissionStatus
+from tests.conftest import magic_link_payloads
 
 
 def _signed(body: str) -> dict:
@@ -346,3 +347,96 @@ async def test_review_hours_modal_bad_hours_returns_errors(
     assert resp.json().get("response_action") == "errors"
     await db.refresh(sub)
     assert sub.hours == 2.0                          # unchanged
+
+
+# ── Announcement "🙋 View & sign up" button ────────────────────────────────────
+#
+# The button lives in a shared channel, so it can't carry a per-person link — the click
+# identifies the clicker instead, and we reply with a personalized magic link. That link
+# is what makes the flow survive Slack's in-app browser, which keeps no cookie between
+# opens. See services/opportunities.opportunity_announcement_blocks.
+
+
+def _view_payload(slack_id: str, opp_id: int) -> dict:
+    return {
+        "type": "block_actions",
+        "user": {"id": slack_id},
+        "response_url": "https://hooks.slack.test/x",
+        "actions": [{"action_id": "opportunity_view", "value": str(opp_id)}],
+    }
+
+
+async def test_opportunity_view_replies_with_a_personal_magic_link(
+    client, capture_webhook, make_student, make_opportunity
+):
+    student = await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity()
+
+    resp = await _interact(client, _view_payload("U0STU", opp.id))
+
+    assert resp.status_code == 200
+    (reply,) = capture_webhook
+    payloads = magic_link_payloads(reply["text"])
+    assert any(
+        p["member_code"] == student.member_code
+        and p["return_to"].endswith(f"/opportunities/{opp.id}")
+        for p in payloads
+    )
+
+
+async def test_opportunity_view_reply_is_ephemeral_and_keeps_the_announcement(
+    client, capture_webhook, make_student, make_opportunity
+):
+    """The original message here is a channel-wide announcement — replying
+    non-ephemerally, or with replace_original, would clobber it for everyone."""
+    await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity()
+
+    await _interact(client, _view_payload("U0STU", opp.id))
+
+    (reply,) = capture_webhook
+    assert reply["response_type"] == "ephemeral"
+    assert reply["replace_original"] is False
+
+
+async def test_opportunity_view_works_for_a_mentor(
+    client, capture_webhook, make_mentor, make_opportunity
+):
+    """Mentors are read-only viewers of an opportunity page and are in the channel too,
+    so the button must not dead-end them."""
+    mentor = await make_mentor(slack="U0MENTOR", code="mnt00001")
+    opp = await make_opportunity()
+
+    await _interact(client, _view_payload("U0MENTOR", opp.id))
+
+    (reply,) = capture_webhook
+    assert any(
+        p["member_code"] == mentor.member_code for p in magic_link_payloads(reply["text"])
+    )
+
+
+async def test_opportunity_view_tells_an_unlinked_user_instead_of_going_silent(
+    client, capture_webhook, make_opportunity
+):
+    """A silent button is indistinguishable from a broken one."""
+    opp = await make_opportunity()
+
+    resp = await _interact(client, _view_payload("U0NOBODY", opp.id))
+
+    assert resp.status_code == 200
+    (reply,) = capture_webhook
+    assert "isn't linked" in reply["text"]
+    assert magic_link_payloads(reply["text"]) == []  # and no link is handed out
+
+
+async def test_opportunity_view_ignores_an_archived_student(
+    client, capture_webhook, make_student, make_opportunity
+):
+    await make_student(slack="U0GONE", code="gone0001", is_active=False)
+    opp = await make_opportunity()
+
+    await _interact(client, _view_payload("U0GONE", opp.id))
+
+    (reply,) = capture_webhook
+    assert "isn't linked" in reply["text"]
+    assert magic_link_payloads(reply["text"]) == []

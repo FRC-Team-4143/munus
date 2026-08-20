@@ -6,22 +6,23 @@ from app.services.opportunities import (
 )
 
 
-def test_announcement_button_is_a_direct_link_not_an_action():
-    """The button must be a plain Slack link button (a `url`, no `action_id`) so it
-    never round-trips through our server — see opportunity_announcement_blocks's
-    docstring for why this trades away per-clicker personalization."""
-    original = settings.base_url
-    try:
-        settings.base_url = "https://munus.example.org"
-        opp = Opportunity(id=42, name="Food Drive")
-        text, blocks = opportunity_announcement_blocks(opp)
+def test_announcement_button_is_an_interactive_action_not_a_link():
+    """The button must be an interactive action carrying the opportunity id, not a
+    `url` link button.
 
-        assert "Food Drive" in text
-        button = blocks[-1]["elements"][0]
-        assert button["url"] == "https://munus.example.org/opportunities/42"
-        assert "action_id" not in button
-    finally:
-        settings.base_url = original
+    A shared-channel message can't embed a per-person link, but a click identifies the
+    clicker — which is the only way to hand out a working sign-in in Slack's in-app
+    browser, where no cookie survives between opens. `routers/slack.py`'s
+    `_handle_opportunity_view` is the other half. The action id must also stay
+    registered in Legion's slack_dispatch, or clicks are silently swallowed."""
+    opp = Opportunity(id=42, name="Food Drive")
+    text, blocks = opportunity_announcement_blocks(opp)
+
+    assert "Food Drive" in text
+    button = blocks[-1]["elements"][0]
+    assert button["action_id"] == "opportunity_view"
+    assert button["value"] == "42"
+    assert "url" not in button  # a url button would bypass our server entirely
 
 
 def test_announcement_flags_required_opportunity():

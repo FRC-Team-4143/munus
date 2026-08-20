@@ -165,6 +165,26 @@ def make_sso_cookie(
     })
 
 
+def magic_link_payloads(text: str) -> list[dict]:
+    """Every magic-link token embedded in `text`, decoded to its payload.
+
+    A magic link (services/legion_auth.make_link_url) puts the member code *inside* a
+    signed token rather than in the query string, so tests assert on the decoded
+    payload instead of pattern-matching the URL. Verifying rather than just parsing
+    also catches a link signed with the wrong salt or secret, which would be accepted
+    nowhere."""
+    import re
+
+    from itsdangerous import URLSafeTimedSerializer
+
+    from app.config import settings
+
+    signer = URLSafeTimedSerializer(settings.sso_secret, salt="mw-sso-link")
+    return [
+        signer.loads(token) for token in re.findall(r"/sso/link\?token=([^|>\s]+)", text)
+    ]
+
+
 @pytest_asyncio.fixture
 async def authed_client(client):
     """An httpx client carrying a valid `mw_sso` cookie in the `munus-admin` group."""
@@ -199,3 +219,26 @@ def hush_slack(monkeypatch):
             return None
 
     monkeypatch.setattr(whmod, "AsyncWebhookClient", _FakeWebhook)
+
+
+@pytest.fixture
+def capture_webhook(monkeypatch):
+    """Like `hush_slack`'s webhook stub, but records the kwargs of each `send`.
+
+    Needed where *what* we replied over `response_url` is the behavior under test —
+    e.g. the announcement button, where replying non-ephemerally would overwrite a
+    whole channel's announcement."""
+    import slack_sdk.webhook.async_client as whmod
+
+    sent: list[dict] = []
+
+    class _RecordingWebhook:
+        def __init__(self, url="", *a, **k):
+            self.url = url
+
+        async def send(self, *a, **kwargs):
+            sent.append({"url": self.url, **kwargs})
+            return None
+
+    monkeypatch.setattr(whmod, "AsyncWebhookClient", _RecordingWebhook)
+    return sent

@@ -1,20 +1,34 @@
 """
-One-tap sign-in — starts a Legion SSO challenge for a member Munus already knows about
-(from a Slack payload), skipping Legion's username-entry form.
+One-tap sign-in for a member Munus already knows about (from a Slack payload), skipping
+Legion's username-entry form. Two mechanisms live here:
 
-This is the server-to-server half of the flow; `app/routers/portal.py`'s `/enter` route
-is the other half (decides whether a challenge is even needed, and sends the browser to
-the pending-page URL this returns). See Legion's `routers/sso.py` `POST /sso/challenge`
-docstring for the full round trip.
+**Magic links (`make_link_url`) — preferred for anything we send into Slack.** Slack's
+in-app browser (iOS and Android both) throws away cookies between opens, so a member
+who signed in a minute ago arrives with no `mw_sso` and would face a fresh Approve/Deny
+push on every single tap. A signed link carries the identity itself, so the cookie
+never has to survive. See Legion's `services/sso.make_link_token`.
+
+**Challenges (`start_challenge`) — the older Slack-push round trip.** Still used by
+`/enter` (`app/routers/portal.py`) for links already sitting in Slack history from
+before magic links existed, and as the path for anyone arriving without a token. See
+Legion's `routers/sso.py` `POST /sso/challenge`.
 """
 import logging
 from typing import Optional
+from urllib.parse import quote
 
 import httpx
+from itsdangerous import URLSafeTimedSerializer
 
 from app.config import settings
 
 log = logging.getLogger(__name__)
+
+# Same shared `sso_secret` Munus already uses to verify `mw_sso`, but a distinct salt —
+# Legion's `read_link_token` will only accept tokens signed this way, and a link token
+# must never be usable as a cookie value (it travels in a URL and lands in Slack
+# history and browser history). Kept byte-identical to Legion's `_link_signer`.
+_link_signer = URLSafeTimedSerializer(settings.sso_secret, salt="mw-sso-link")
 
 
 async def start_challenge(member_code: str, *, return_to: str = "/") -> Optional[str]:
@@ -42,6 +56,26 @@ async def start_challenge(member_code: str, *, return_to: str = "/") -> Optional
         return None
 
     return f"{settings.legion_base_url}/sso/pending/{nonce}"
+
+
+def make_link_url(member_code: str, next_path: str = "/me") -> str:
+    """A one-tap magic-link URL signing `member_code` in to Munus at `next_path`.
+
+    Use this for every link Munus puts into a Slack DM or ephemeral reply: Slack has
+    already authenticated the recipient of those, so the Approve/Deny push was
+    re-proving what Slack just told us — and doing it circularly, sending someone who
+    is already in Slack to a page telling them to go back to Slack.
+
+    `return_to` must be **absolute**: Legion's `/sso/link` redirects to it as-is, and a
+    bare path would resolve against Legion's own host rather than Munus's (same trap
+    `start_challenge` callers hit — see `/enter`'s docstring).
+
+    Only send these over channels scoped to one person. A link is a bearer credential;
+    in a shared channel anyone could redeem it as its addressee.
+    """
+    target = f"{settings.base_url}{safe_next(next_path)}"
+    token = _link_signer.dumps({"member_code": member_code, "return_to": target})
+    return f"{settings.legion_base_url}/sso/link?token={quote(token, safe='')}"
 
 
 def safe_next(path: Optional[str]) -> str:

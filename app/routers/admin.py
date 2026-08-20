@@ -148,6 +148,13 @@ def _require_auth(request: Request):
     identity = sso_identity(request)
     if identity is None:
         return RedirectResponse(make_authorize_url(request), status_code=303)
+    # A magic-link identity carries no groups by construction (Legion's
+    # `make_link_sso_token`), so it already fails every check below — but treat it as
+    # "not signed in strongly enough" rather than "not allowed", since the person may
+    # well be an admin who just arrived from a Slack link. Send them to a real sign-in
+    # instead of stranding them on a 403.
+    if identity.get("via") == "link":
+        return RedirectResponse(make_authorize_url(request), status_code=303)
     groups = set(identity.get("groups") or [])
     if _ADMIN_GROUP in groups:
         return None

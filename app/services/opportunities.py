@@ -143,13 +143,22 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     `update_announcement` afterward (see routers/admin.py): the span can shift as shifts
     are added, rescheduled, or removed, and the already-posted message needs to track it.
 
-    The button is a plain Slack *link* button (a `url`, no `action_id`) straight to the
-    opportunity page — it never touches our server, so it's a real one-tap click for
-    anyone with a live Legion session. There's no way to personalize a shared channel
-    message's button per-clicker, so someone without a live session just hits Munus's
-    normal sign-in wall (types their username) instead of the one-tap Slack-push
-    bootstrap `/enter` gives you — a deliberate trade for not needing a second,
-    ephemeral reply message just to open the page."""
+    The button is an **interactive** button (`action_id: opportunity_view`), not a link
+    button, because a shared-channel message can't embed a per-person link but a *click*
+    carries the clicker's Slack user id. `routers/slack.py` resolves that to a member and
+    replies ephemerally with a personalized magic link.
+
+    This used to be a plain `url` button straight to the opportunity page, on the
+    reasoning that it was one tap for anyone holding a live session and only cost the
+    sign-in wall otherwise. That traded on the session surviving — and it never does
+    here: Slack's in-app browser discards cookies between opens, so *every* click paid
+    the wall, and the worst version of it (this link carries no `member`, so it landed on
+    Legion's type-your-username form rather than a one-tap push). The extra ephemeral
+    message is worth it to get back to one tap plus one tap.
+
+    Routing note: `opportunity_view` must stay registered in Legion's
+    `routers/slack_dispatch.py` — unrouted action ids are swallowed with a 200, which
+    would make this button look broken rather than error."""
     info = []
     if opp.location:
         info.append(f"📍 {opp.location}")
@@ -190,7 +199,8 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
                 {
                     "type": "button",
                     "text": {"type": "plain_text", "text": "🙋 View & sign up", "emoji": True},
-                    "url": f"{settings.base_url}/opportunities/{opp.id}",
+                    "action_id": "opportunity_view",
+                    "value": str(opp.id),
                 }
             ],
         }

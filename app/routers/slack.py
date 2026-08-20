@@ -23,6 +23,7 @@ from app.models import (
     HourSubmission, Mentor, Shift, Signup, SignupStatus, Student, SubmissionStatus,
 )
 from app.services import audit, submissions
+from app.services.legion_auth import make_link_url
 from app.services.reports import mentor_vhours_message, student_vhours_message
 from app.services.slack_client import open_modal, send_dm
 from app.utils import shift_length_hours
@@ -175,6 +176,10 @@ async def slack_interact(
             request, db, background_tasks, action_id, value, acting_slack_id, response_url
         )
 
+    # ── Anyone opening an opportunity from the channel announcement ──
+    if action_id == "opportunity_view":
+        return await _handle_opportunity_view(db, value, acting_slack_id, response_url)
+
     return Response(status_code=200)
 
 
@@ -216,6 +221,73 @@ async def _load_submission(db: AsyncSession, submission_id: int) -> Optional[Hou
             .where(HourSubmission.id == submission_id)
         )
     ).scalars().first()
+
+
+async def _handle_opportunity_view(
+    db: AsyncSession, value: str, acting_slack_id: str, response_url: str
+):
+    """The channel announcement's "🙋 View & sign up" button.
+
+    A shared-channel message can't carry a per-person link, but the *click* tells us who
+    clicked — so we mint that person a magic link and hand it back ephemerally. That's
+    what makes this work in Slack's in-app browser, which has no surviving `mw_sso` to
+    fall back on (see services/legion_auth.make_link_url).
+
+    The reply MUST go out over `response_url` as `response_type: "ephemeral"`. Returning
+    a message body from a `block_actions` request replaces the *original* message —
+    which here is the announcement itself, visible to the whole channel.
+
+    Students and mentors both get through: a mentor is a read-only viewer of an
+    opportunity page (`_current_mentor` in routers/portal.py), and the announcement is
+    posted to a channel they're in too.
+    """
+    from slack_sdk.webhook.async_client import AsyncWebhookClient
+
+    try:
+        opp_id = int(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid opportunity id")
+
+    member_code = None
+    if acting_slack_id:
+        student = (
+            await db.execute(
+                select(Student).where(
+                    Student.slack_user_id == acting_slack_id, Student.is_active.is_(True)
+                )
+            )
+        ).scalars().first()
+        if student is not None:
+            member_code = student.member_code
+        else:
+            mentor = (
+                await db.execute(
+                    select(Mentor).where(
+                        Mentor.slack_user_id == acting_slack_id, Mentor.is_active.is_(True)
+                    )
+                )
+            ).scalars().first()
+            if mentor is not None:
+                member_code = mentor.member_code
+
+    if member_code is None:
+        # Say so rather than no-op: a silent button is indistinguishable from a broken
+        # one, and "your Slack isn't linked yet" is something an admin can actually fix.
+        text = (
+            "❌ Your Slack account isn't linked to a Munus record yet, so I can't sign "
+            "you in. Please ask an admin to link it."
+        )
+    else:
+        text = (
+            f"<{make_link_url(member_code, f'/opportunities/{opp_id}')}"
+            "|🙋 Open this opportunity>"
+        )
+
+    if response_url:
+        await AsyncWebhookClient(response_url).send(
+            text=text, response_type="ephemeral", replace_original=False
+        )
+    return Response(status_code=200)
 
 
 async def _is_mentor(db: AsyncSession, acting_slack_id: str) -> bool:

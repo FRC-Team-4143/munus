@@ -133,7 +133,26 @@ for the whole app; no Munus-specific cookie or password exists anywhere.
   Freshman (any team); sophomore + team 4423 → 4423 Student; everything else → 4143
   Student. The `level_requirements` table (pool *sizes*, still admin-editable on
   **Admin → Requirements**) is unaffected — only which pool a student falls into changed.
-- **One-tap sign-in (`services/legion_auth.py`, `GET /enter` in `routers/portal.py`):**
+- **Magic links are how Slack-delivered links sign people in
+  (`services/legion_auth.make_link_url` → Legion's `GET /sso/link`).** Slack's in-app
+  browser — on iOS *and* Android, and it can't be detected server-side (it sends a stock
+  mobile Safari UA) — uses ephemeral cookie storage, so `mw_sso` never survives from one
+  Slack tap to the next. Rather than fight that, every link Munus puts in a DM or an
+  ephemeral reply carries a signed token naming the member, and Legion mints the cookie
+  from it on arrival: no Approve/Deny round trip, and a vanished cookie just gets
+  re-minted on the next tap. Sound because Slack already authenticated the recipient of a
+  DM or ephemeral reply — the push was re-proving that, circularly (it sent someone who
+  was *in* Slack to a page telling them to go back to Slack). **Only ever put these in
+  per-person channels**: a link is a bearer credential, so in a shared channel anyone
+  could redeem it as its addressee. Link-borne cookies are non-privileged by construction
+  (`groups: []` + `via: "link"`), and `_require_auth` in `routers/admin.py` bounces them
+  to a real sign-in — so a leaked link can never reach `/admin`. TTL is Legion's
+  `SSO_LINK_TTL`, held equal to `SSO_SESSION_TTL` (12h) so a link in a shared computer's
+  browser history can't outlive the session it created. An expired link isn't a
+  dead end — it falls back to Legion's sign-in page, keeping the intended destination.
+- **One-tap sign-in (`services/legion_auth.py`, `GET /enter` in `routers/portal.py`) —
+  the older Slack-push path.** Still live for `/enter?member=…` links already sitting in
+  Slack history from before magic links, and for anyone arriving without a token:
   `/vhours` and the announcement button link to `/enter?member=<code>&next=<path>`. If
   the browser already holds a live `mw_sso` cookie, `/enter` redirects straight to
   `next` — **no** Legion round trip, which is what stops a repeated `/vhours` call from
@@ -212,21 +231,32 @@ in that channel) at the moment there's finally something to act on: the **first 
 added to a shift-based opportunity (`admin_shift_create`), or immediately on creation
 for a **continuous** one (`admin_opportunities_create` — it has no shifts to wait for).
 The message (`opportunities.opportunity_announcement_blocks`) carries a **🙋 View & sign
-up** button — a plain Slack *link* button (a `url`, no `action_id`), straight to
-`{BASE_URL}/opportunities/{id}`. The title renders in its own `header` block (Slack's
+up** button — an *interactive* button (`action_id: opportunity_view`, opportunity id in
+`value`). The title renders in its own `header` block (Slack's
 only way to get larger text — mrkdwn `section` text has no font-size control), which
 means it's `plain_text` only and capped at 150 chars; `opportunity_announcement_blocks`
 truncates with `…` if `opp.name` pushes it over. The required flag, description, and
 info bullets (location/date/attire) live in a separate `section` block below it, each
 its own paragraph (blank `\n\n` line) so they don't read as one dense block.
 
-Being a link button, it never touches our server — Slack opens the URL directly, a
-genuine one-tap click for anyone with a live Legion session. The tradeoff: a shared
-channel message can't carry a personalized link per-clicker, so someone *without* a
-live session just hits Munus's normal sign-in wall (types their Legion username)
-instead of the one-tap Slack-push bootstrap `/enter` gives `/vhours`. Chosen
-deliberately over the alternative (an interactive button + an ephemeral reply with a
-personalized `/enter` link) to avoid the extra message just to open the page.
+A shared-channel message can't carry a per-person link, but a *click* identifies the
+clicker — so `routers/slack.py`'s `_handle_opportunity_view` resolves `payload.user.id`
+to a student or mentor and replies **ephemerally** with a personalized magic link
+(`services/legion_auth.make_link_url`). That reply must go over `response_url` with
+`response_type: "ephemeral"` and `replace_original=False`: returning a message body from
+a `block_actions` request replaces the *original* message, which here is the whole
+channel's announcement. An unrecognized Slack user gets a "your account isn't linked"
+reply rather than silence. `opportunity_view` must stay registered in Legion's
+`routers/slack_dispatch.py` — unrouted action ids are swallowed with a 200, so a missing
+entry makes the button look broken rather than error.
+
+This used to be a plain `url` link button straight to `{BASE_URL}/opportunities/{id}`,
+on the reasoning that it was one tap for anyone holding a live session and only cost the
+sign-in wall otherwise, which beat paying for an extra ephemeral message. That traded on
+the session surviving — and it never does: Slack's in-app browser discards cookies
+between opens (see "Legion integration"), so *every* click paid the wall, in its worst
+form. The old link carried no `member`, so it landed on Legion's type-your-username form
+rather than even the one-tap push `/vhours` gets. Two taps beats that.
 
 `announce_opportunity` records where it posted (`Opportunity.announcement_channel_id`/
 `announcement_ts`). The blocks also carry a 📅 date line (`utils.format_date_range`

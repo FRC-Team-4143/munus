@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from app.models import HourSubmission, Signup, SignupStatus, StudentLevel, SubmissionStatus
 from app.services.app_settings import set_season_start
 from app.services.reports import student_progress_report
+from tests.conftest import magic_link_payloads
 
 
 async def test_report_sticky_projected(db, make_student, make_opportunity, make_shift):
@@ -82,7 +83,10 @@ async def test_student_vhours_message(db, make_student, make_opportunity, make_s
     assert "Your Volunteer Hours" in msg
     assert "Season total:" in msg
     assert "Park Cleanup" in msg        # the upcoming shift is listed
-    assert f"/enter?member={student.member_code}" in msg  # one-tap dashboard link
+    # One-tap dashboard link: a signed magic link, so it works on the first tap even in
+    # Slack's in-app browser where no mw_sso cookie survives between opens.
+    payloads = magic_link_payloads(msg)
+    assert any(p["member_code"] == student.member_code for p in payloads)
 
 
 async def test_student_vhours_message_lists_available_opportunities_when_short(
@@ -111,7 +115,11 @@ async def test_student_vhours_message_lists_available_opportunities_when_short(
     assert "Shop Cleanup" in available_section
     assert "Ongoing" in available_section  # continuous opportunity has no shift date
     assert "Already Signed Up" not in available_section  # already signed up -> not renudged
-    assert f"/enter?member={student.member_code}&next=/opportunities/{open_opp.id}" in msg
+    assert any(
+        p["member_code"] == student.member_code
+        and p["return_to"].endswith(f"/opportunities/{open_opp.id}")
+        for p in magic_link_payloads(msg)
+    )
 
 
 async def test_student_vhours_message_omits_available_opportunities_when_met(

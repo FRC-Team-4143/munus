@@ -18,6 +18,7 @@ from app.models import (
     HourSubmission, Mentor, Shift, Signup, SignupStatus, Student, StudentLevel, SubmissionStatus,
 )
 from app.services.app_settings import season_start_utc
+from app.services.legion_auth import make_link_url
 from app.services.opportunities import available_opportunities_for_student, upcoming_signups_for_student
 from app.services.requirements import (
     level_requirements_map, resolve_required_hours, season_required_opportunities,
@@ -303,13 +304,14 @@ async def student_vhours_message(db: AsyncSession, student: Student) -> str:
             reply += "\n\n*Opportunities you could sign up for:*"
             for entry in available:
                 opp = entry["opp"]
-                opp_url = f"{settings.base_url}/enter?member={student.member_code}&next=/opportunities/{opp.id}"
+                opp_url = make_link_url(student.member_code, f"/opportunities/{opp.id}")
                 reply += f"\n• <{opp_url}|{opp.name}> — {entry['date_range']}"
 
-    # A plain mrkdwn hyperlink (not an interactive button) so it just opens the URL. No
-    # Legion round trip happens here — /enter (services/legion_auth.py) only starts a
-    # challenge if the click actually needs one (see its docstring).
-    dashboard_url = f"{settings.base_url}/enter?member={student.member_code}"
+    # A plain mrkdwn hyperlink (not an interactive button) so it just opens the URL. A
+    # signed magic link, so it works on the first tap even in Slack's cookie-less in-app
+    # browser — no Approve/Deny round trip. Safe here because this message is only ever
+    # a DM or an ephemeral reply, i.e. visible to this student alone.
+    dashboard_url = make_link_url(student.member_code)
     reply += f"\n\n<{dashboard_url}|📊 Open my dashboard>"
     return reply
 
@@ -319,9 +321,10 @@ def mentor_vhours_message(mentor: Mentor) -> str:
     progress of their own — `/vhours` is student-only — but they're still a read-only
     viewer of `/opportunities` (see `_current_mentor` in routers/portal.py, added so the
     opportunity-announcement's "View & sign up" link doesn't dead-end a mentor who clicks
-    it), so point them there instead of just saying "no". Same one-tap `/enter` link
-    pattern as `student_vhours_message` — no Legion round trip unless the browser needs one."""
-    opportunities_url = f"{settings.base_url}/enter?member={mentor.member_code}&next=/opportunities"
+    it), so point them there instead of just saying "no". Same one-tap magic link as
+    `student_vhours_message`, and safe for the same reason: `/vhours` replies are
+    ephemeral, so only this mentor ever sees it."""
+    opportunities_url = make_link_url(mentor.member_code, "/opportunities")
     return (
         "❌ `/vhours` shows a student's season progress, so there's nothing to report for "
         "a mentor account.\n\n"
