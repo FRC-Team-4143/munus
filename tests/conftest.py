@@ -222,6 +222,21 @@ def hush_slack(monkeypatch):
 
 
 @pytest.fixture
+def capture_modal(monkeypatch):
+    """Record the views passed to `open_modal`, and report success without calling Slack."""
+    import app.routers.slack as slackmod
+
+    opened: list[dict] = []
+
+    async def _open(trigger_id, view):
+        opened.append(view)
+        return True
+
+    monkeypatch.setattr(slackmod, "open_modal", _open)
+    return opened
+
+
+@pytest.fixture
 def capture_webhook(monkeypatch):
     """Like `hush_slack`'s webhook stub, but records the kwargs of each `send`.
 

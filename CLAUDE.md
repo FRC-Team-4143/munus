@@ -239,24 +239,39 @@ truncates with `…` if `opp.name` pushes it over. The required flag, descriptio
 info bullets (location/date/attire) live in a separate `section` block below it, each
 its own paragraph (blank `\n\n` line) so they don't read as one dense block.
 
-A shared-channel message can't carry a per-person link, but a *click* identifies the
-clicker — so `routers/slack.py`'s `_handle_opportunity_view` resolves `payload.user.id`
-to a student or mentor and replies **ephemerally** with a personalized magic link
-(`services/legion_auth.make_link_url`). That reply must go over `response_url` with
-`response_type: "ephemeral"` and `replace_original=False`: returning a message body from
-a `block_actions` request replaces the *original* message, which here is the whole
-channel's announcement. An unrecognized Slack user gets a "your account isn't linked"
-reply rather than silence. `opportunity_view` must stay registered in Legion's
-`routers/slack_dispatch.py` — unrouted action ids are swallowed with a 200, so a missing
-entry makes the button look broken rather than error.
+**Clicking it opens a modal — it posts nothing.** A shared-channel message can't carry
+a per-person link (a `url` button is rendered client-side and never reaches our server,
+so it can't know who clicked), but the *click* identifies the clicker.
+`routers/slack.py`'s `_handle_opportunity_view` uses that to open
+`opportunities.opportunity_signup_modal` via `views.open`: the student picks a shift and
+submits, and `_handle_opportunity_signup_submit` calls the same
+`opportunities.signup_student` the web portal does, so capacity and duplicate handling
+can't drift between the two. No message, no browser, no sign-in.
 
-This used to be a plain `url` link button straight to `{BASE_URL}/opportunities/{id}`,
-on the reasoning that it was one tap for anyone holding a live session and only cost the
-sign-in wall otherwise, which beat paying for an extra ephemeral message. That traded on
-the session surviving — and it never does: Slack's in-app browser discards cookies
-between opens (see "Legion integration"), so *every* click paid the wall, in its worst
-form. The old link carried no `member`, so it landed on Legion's type-your-username form
-rather than even the one-tap push `/vhours` gets. Two taps beats that.
+Notes:
+- **Open the modal inline, never from a background task** — `trigger_id` expires in ~3s
+  (same constraint as `hours_adjust`).
+- `notice=` replaces the shift picker *and* drops the submit button, for the cases with
+  nothing to sign up for: a continuous opportunity, no upcoming shifts, a mentor
+  (read-only here, as on the web), or an unlinked Slack account. Each says which —
+  "nothing happened" is indistinguishable from a broken button.
+- A rejected signup (full, already signed up, shift not on this opportunity) returns
+  Slack's `response_action: errors`, keeping the modal open so they can pick again.
+  `private_metadata` is attacker-controlled like any form field, hence the
+  shift-belongs-to-opportunity check.
+- **Both** `opportunity_view` (action) and `opportunity_signup` (callback) must stay
+  registered in Legion's `routers/slack_dispatch.py` — unrouted ids are swallowed with a
+  200, so a missing entry silently drops the click or the signup.
+
+Two earlier designs were tried and rejected. A plain `url` link button to
+`{BASE_URL}/opportunities/{id}` looked like one tap, but traded on a live session
+surviving — and it never does: Slack's in-app browser discards cookies between opens
+(see "Legion integration"), so *every* click hit the sign-in wall, in its worst form
+(the link carried no `member`, so it landed on Legion's type-your-username form rather
+than even the one-tap push `/vhours` gets). Replacing it with an ephemeral reply
+carrying a personalized magic link fixed the auth but put a second message in the
+channel on every click — hidden to others, but still clutter for the clicker. The modal
+has neither problem.
 
 `announce_opportunity` records where it posted (`Opportunity.announcement_channel_id`/
 `announcement_ts`). The blocks also carry a 📅 date line (`utils.format_date_range`

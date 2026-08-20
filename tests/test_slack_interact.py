@@ -349,94 +349,184 @@ async def test_review_hours_modal_bad_hours_returns_errors(
     assert sub.hours == 2.0                          # unchanged
 
 
-# ── Announcement "🙋 View & sign up" button ────────────────────────────────────
+
+
+# ── Announcement "🙋 View & sign up" button → modal ────────────────────────────
 #
-# The button lives in a shared channel, so it can't carry a per-person link — the click
-# identifies the clicker instead, and we reply with a personalized magic link. That link
-# is what makes the flow survive Slack's in-app browser, which keeps no cookie between
-# opens. See services/opportunities.opportunity_announcement_blocks.
+# The button lives in a shared channel, so it can't carry a per-person link (a url
+# button is rendered client-side and never reaches us). Clicking it opens a modal
+# instead: that uses the clicker's identity without putting anything in the channel —
+# no message, no browser, no sign-in.
 
 
-def _view_payload(slack_id: str, opp_id: int) -> dict:
+def _view_payload(slack_id: str, opp_id: int, trigger_id: str = "t") -> dict:
     return {
         "type": "block_actions",
         "user": {"id": slack_id},
+        "trigger_id": trigger_id,
         "response_url": "https://hooks.slack.test/x",
         "actions": [{"action_id": "opportunity_view", "value": str(opp_id)}],
     }
 
 
-async def test_opportunity_view_replies_with_a_personal_magic_link(
-    client, capture_webhook, make_student, make_opportunity
+def _submit_payload(slack_id: str, opp_id: int, shift_id) -> dict:
+    selected = (
+        {"selected_option": {"value": str(shift_id), "text": {"type": "plain_text", "text": "s"}}}
+        if shift_id is not None else {}
+    )
+    return {
+        "type": "view_submission",
+        "user": {"id": slack_id},
+        "view": {
+            "callback_id": "opportunity_signup",
+            "private_metadata": str(opp_id),
+            "state": {"values": {"shift": {"value": selected}}},
+        },
+    }
+
+
+async def test_view_button_opens_a_modal_and_posts_nothing(
+    client, capture_webhook, capture_modal, make_student, make_opportunity, make_shift
 ):
-    student = await make_student(slack="U0STU", code="stu00001")
-    opp = await make_opportunity()
+    """The whole point of the modal: the channel stays untouched."""
+    await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity(name="Food Drive")
+    shift = await make_shift(opp.id, start_in_hours=24)
 
     resp = await _interact(client, _view_payload("U0STU", opp.id))
 
     assert resp.status_code == 200
-    (reply,) = capture_webhook
-    payloads = magic_link_payloads(reply["text"])
-    assert any(
-        p["member_code"] == student.member_code
-        and p["return_to"].endswith(f"/opportunities/{opp.id}")
-        for p in payloads
-    )
+    assert capture_webhook == []  # nothing sent to the channel, ephemeral or otherwise
+    (view,) = capture_modal
+    assert view["callback_id"] == "opportunity_signup"
+    assert view["private_metadata"] == str(opp.id)
+    options = view["blocks"][-1]["element"]["options"]
+    assert [o["value"] for o in options] == [str(shift.id)]
+    assert view["submit"]["text"] == "Sign up"
 
 
-async def test_opportunity_view_reply_is_ephemeral_and_keeps_the_announcement(
-    client, capture_webhook, make_student, make_opportunity
+async def test_modal_marks_full_and_already_signed_up_shifts(
+    client, db, capture_modal, make_student, make_opportunity, make_shift
 ):
-    """The original message here is a channel-wide announcement — replying
-    non-ephemerally, or with replace_original, would clobber it for everyone."""
-    await make_student(slack="U0STU", code="stu00001")
+    student = await make_student(slack="U0STU", code="stu00001")
+    other = await make_student(name="Other", slack="U0OTH", code="oth00001")
     opp = await make_opportunity()
+    joined = await make_shift(opp.id, start_in_hours=24)
+    full = await make_shift(opp.id, capacity=1, start_in_hours=48)
+    db.add(Signup(shift_id=joined.id, student_id=student.id, status=SignupStatus.signed_up))
+    db.add(Signup(shift_id=full.id, student_id=other.id, status=SignupStatus.signed_up))
+    await db.commit()
 
     await _interact(client, _view_payload("U0STU", opp.id))
 
-    (reply,) = capture_webhook
-    assert reply["response_type"] == "ephemeral"
-    assert reply["replace_original"] is False
+    (view,) = capture_modal
+    labels = {
+        o["value"]: o["text"]["text"] for o in view["blocks"][-1]["element"]["options"]
+    }
+    assert "signed up" in labels[str(joined.id)]
+    assert "FULL" in labels[str(full.id)]
 
 
-async def test_opportunity_view_works_for_a_mentor(
-    client, capture_webhook, make_mentor, make_opportunity
+async def test_modal_for_a_mentor_is_read_only(
+    client, capture_modal, make_mentor, make_opportunity, make_shift
 ):
-    """Mentors are read-only viewers of an opportunity page and are in the channel too,
-    so the button must not dead-end them."""
-    mentor = await make_mentor(slack="U0MENTOR", code="mnt00001")
+    """Mentors don't sign up — they get the details, not an empty form."""
+    await make_mentor(slack="U0MENTOR", code="mnt00001")
     opp = await make_opportunity()
+    await make_shift(opp.id, start_in_hours=24)
 
     await _interact(client, _view_payload("U0MENTOR", opp.id))
 
-    (reply,) = capture_webhook
-    assert any(
-        p["member_code"] == mentor.member_code for p in magic_link_payloads(reply["text"])
-    )
+    (view,) = capture_modal
+    assert "submit" not in view
+    assert "Mentors don't sign up" in view["blocks"][-1]["text"]["text"]
 
 
-async def test_opportunity_view_tells_an_unlinked_user_instead_of_going_silent(
-    client, capture_webhook, make_opportunity
+async def test_modal_for_a_continuous_opportunity_has_no_shift_picker(
+    client, capture_modal, make_student, make_opportunity
 ):
-    """A silent button is indistinguishable from a broken one."""
-    opp = await make_opportunity()
+    await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity(is_continuous=True)
 
-    resp = await _interact(client, _view_payload("U0NOBODY", opp.id))
+    await _interact(client, _view_payload("U0STU", opp.id))
+
+    (view,) = capture_modal
+    assert "submit" not in view
+    assert "ongoing opportunity" in view["blocks"][-1]["text"]["text"]
+
+
+async def test_modal_tells_an_unlinked_user_why(
+    client, capture_modal, make_opportunity, make_shift
+):
+    opp = await make_opportunity()
+    await make_shift(opp.id, start_in_hours=24)
+
+    await _interact(client, _view_payload("U0NOBODY", opp.id))
+
+    (view,) = capture_modal
+    assert "submit" not in view
+    assert "isn't linked" in view["blocks"][-1]["text"]["text"]
+
+
+async def test_submitting_the_modal_signs_the_student_up(
+    client, db, make_student, make_opportunity, make_shift
+):
+    student = await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity()
+    shift = await make_shift(opp.id, start_in_hours=24)
+
+    resp = await _interact(client, _submit_payload("U0STU", opp.id, shift.id))
 
     assert resp.status_code == 200
-    (reply,) = capture_webhook
-    assert "isn't linked" in reply["text"]
-    assert magic_link_payloads(reply["text"]) == []  # and no link is handed out
+    assert "response_action" not in resp.text  # no errors -> Slack closes the modal
+    signup = (
+        await db.execute(select(Signup).where(Signup.shift_id == shift.id))
+    ).scalars().first()
+    assert signup is not None and signup.status == SignupStatus.signed_up
 
 
-async def test_opportunity_view_ignores_an_archived_student(
-    client, capture_webhook, make_student, make_opportunity
+async def test_submitting_a_full_shift_keeps_the_modal_open_with_the_reason(
+    client, db, make_student, make_opportunity, make_shift
 ):
-    await make_student(slack="U0GONE", code="gone0001", is_active=False)
+    """Capacity is enforced by the same signup_student the web portal uses, and the
+    modal stays open so they can pick a different shift."""
+    student = await make_student(slack="U0STU", code="stu00001")
+    other = await make_student(name="Other", slack="U0OTH", code="oth00001")
+    opp = await make_opportunity()
+    shift = await make_shift(opp.id, capacity=1, start_in_hours=24)
+    db.add(Signup(shift_id=shift.id, student_id=other.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    resp = await _interact(client, _submit_payload("U0STU", opp.id, shift.id))
+
+    assert resp.json()["response_action"] == "errors"
+    assert "full" in resp.json()["errors"]["shift"].lower()
+    mine = (
+        await db.execute(select(Signup).where(Signup.student_id == student.id))
+    ).scalars().first()
+    assert mine is None
+
+
+async def test_submitting_a_shift_from_another_opportunity_is_rejected(
+    client, make_student, make_opportunity, make_shift
+):
+    """private_metadata is attacker-controlled input like any other form field."""
+    await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity()
+    other_opp = await make_opportunity(name="Other")
+    foreign = await make_shift(other_opp.id, start_in_hours=24)
+
+    resp = await _interact(client, _submit_payload("U0STU", opp.id, foreign.id))
+
+    assert resp.json()["response_action"] == "errors"
+
+
+async def test_submitting_without_picking_a_shift_errors(
+    client, make_student, make_opportunity
+):
+    await make_student(slack="U0STU", code="stu00001")
     opp = await make_opportunity()
 
-    await _interact(client, _view_payload("U0GONE", opp.id))
+    resp = await _interact(client, _submit_payload("U0STU", opp.id, None))
 
-    (reply,) = capture_webhook
-    assert "isn't linked" in reply["text"]
-    assert magic_link_payloads(reply["text"]) == []
+    assert resp.json()["response_action"] == "errors"

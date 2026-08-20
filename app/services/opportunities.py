@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.models import Opportunity, Shift, Signup, SignupStatus
 from app.services.slack_client import post_to_channel, update_channel_message
-from app.utils import format_date_range, now_utc
+from app.utils import format_date_range, format_shift_range, now_utc
 
 
 async def upcoming_signups_for_student(db: AsyncSession, student_id: int) -> list[Signup]:
@@ -144,21 +144,20 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     are added, rescheduled, or removed, and the already-posted message needs to track it.
 
     The button is an **interactive** button (`action_id: opportunity_view`), not a link
-    button, because a shared-channel message can't embed a per-person link but a *click*
-    carries the clicker's Slack user id. `routers/slack.py` resolves that to a member and
-    replies ephemerally with a personalized magic link.
+    button, and clicking it opens a modal (`opportunity_signup_modal`) — see there for
+    why a shared-channel message can't personalize a `url` button, and why a modal
+    rather than a reply.
 
-    This used to be a plain `url` button straight to the opportunity page, on the
+    It was briefly a plain `url` button straight to the opportunity page, on the
     reasoning that it was one tap for anyone holding a live session and only cost the
-    sign-in wall otherwise. That traded on the session surviving — and it never does
-    here: Slack's in-app browser discards cookies between opens, so *every* click paid
-    the wall, and the worst version of it (this link carries no `member`, so it landed on
-    Legion's type-your-username form rather than a one-tap push). The extra ephemeral
-    message is worth it to get back to one tap plus one tap.
+    sign-in wall otherwise. That traded on the session surviving — and it never does:
+    Slack's in-app browser discards cookies between opens, so *every* click paid the
+    wall, in its worst form (the link carried no `member`, so it landed on Legion's
+    type-your-username form rather than even a one-tap push).
 
-    Routing note: `opportunity_view` must stay registered in Legion's
-    `routers/slack_dispatch.py` — unrouted action ids are swallowed with a 200, which
-    would make this button look broken rather than error."""
+    Routing note: `opportunity_view` *and* the modal's `opportunity_signup` callback
+    must stay registered in Legion's `routers/slack_dispatch.py` — unrouted ids are
+    swallowed with a 200, which makes the button look broken rather than error."""
     info = []
     if opp.location:
         info.append(f"📍 {opp.location}")
@@ -206,6 +205,127 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
         }
     )
     return text, blocks
+
+
+SIGNUP_CALLBACK = "opportunity_signup"
+_SELECT_OPTION_MAX = 75  # Slack's hard cap on a select option's text
+
+
+def _shift_option(row: dict) -> dict:
+    """One `static_select` option for a shift row from `shift_options_for_modal`."""
+    label = format_shift_range(row["shift"].start_time, row["shift"].end_time)
+    if row["signed_up"]:
+        label += " ✅ signed up"
+    elif row["is_full"]:
+        label += " · FULL"
+    elif row["remaining"] is not None:
+        label += f" · {row['remaining']} left"
+    if len(label) > _SELECT_OPTION_MAX:
+        label = label[: _SELECT_OPTION_MAX - 1] + "…"
+    return {
+        "text": {"type": "plain_text", "text": label},
+        "value": str(row["shift"].id),
+    }
+
+
+def opportunity_signup_modal(
+    opp: Opportunity, shift_rows: Optional[list[dict]], *, notice: Optional[str] = None
+) -> dict:
+    """The modal behind the announcement's "🙋 View & sign up" button.
+
+    Opening a modal rather than replying with a message is the whole point. A click in a
+    shared channel identifies the clicker — which a plain `url` button never can, since
+    Slack renders it client-side and it never reaches us — but *any* reply, even an
+    ephemeral one, puts another message in the channel. A modal opens in place and posts
+    nothing, so the button just works.
+
+    `notice` renders instead of the shift picker and suppresses the submit button, for
+    the cases where there's nothing to sign up for: a continuous opportunity, one with
+    no upcoming shifts, or a mentor (a read-only viewer here, same as on the web).
+    """
+    blocks: list[dict] = []
+    details = []
+    if opp.is_required:
+        details.append("🚨 *Required — every active student must sign up for at least 1 shift.*")
+    if opp.description:
+        details.append(opp.description)
+    info = []
+    if opp.location:
+        info.append(f"📍 {opp.location}")
+    if opp.attire:
+        info.append(f"👕 {opp.attire}")
+    if info:
+        details.append("\n".join(info))
+    if details:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n\n".join(details)}})
+
+    if notice:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": notice}})
+    else:
+        blocks.append({
+            "type": "input",
+            "block_id": "shift",
+            "label": {"type": "plain_text", "text": "Pick a shift"},
+            "element": {
+                "type": "static_select",
+                "action_id": "value",
+                "placeholder": {"type": "plain_text", "text": "Choose a shift"},
+                "options": [_shift_option(r) for r in shift_rows or []],
+            },
+        })
+
+    title = opp.name if len(opp.name) <= 24 else opp.name[:23] + "…"  # Slack caps titles at 24
+    view = {
+        "type": "modal",
+        "callback_id": SIGNUP_CALLBACK,
+        "private_metadata": str(opp.id),
+        "title": {"type": "plain_text", "text": title},
+        "close": {"type": "plain_text", "text": "Close"},
+        "blocks": blocks,
+    }
+    if not notice:
+        view["submit"] = {"type": "plain_text", "text": "Sign up"}
+    return view
+
+
+async def shift_options_for_modal(
+    db: AsyncSession, opp: Opportunity, student_id: Optional[int]
+) -> list[dict]:
+    """Joinable shifts for `opp`, with capacity and already-signed-up state.
+
+    Mirrors the opportunity page's own filter (`routers/portal.py`): a shift stays
+    joinable until it's fully over, so one already in progress doesn't vanish from the
+    list the moment it starts."""
+    now = now_utc()
+    shifts = sorted(
+        [s for s in opp.shifts if s.start_time > now or s.end_time > now],
+        key=lambda s: s.start_time,
+    )
+    mine: set[int] = set()
+    if student_id is not None and shifts:
+        mine = {
+            row.shift_id
+            for row in (
+                await db.execute(
+                    select(Signup).where(
+                        Signup.student_id == student_id,
+                        Signup.status == SignupStatus.signed_up,
+                        Signup.shift_id.in_([s.id for s in shifts]),
+                    )
+                )
+            ).scalars().all()
+        }
+
+    rows = []
+    for shift in shifts:
+        remaining = await remaining_capacity(db, shift)
+        rows.append({
+            "shift": shift,
+            "remaining": remaining,
+            "is_full": remaining is not None and remaining <= 0,
+            "signed_up": shift.id in mine,
+        })
+    return rows
 
 
 async def announce_opportunity(db: AsyncSession, opp: Opportunity) -> Optional[str]:

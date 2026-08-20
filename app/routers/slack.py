@@ -20,10 +20,10 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.database import get_db
 from app.models import (
-    HourSubmission, Mentor, Shift, Signup, SignupStatus, Student, SubmissionStatus,
+    HourSubmission, Mentor, Opportunity, Shift, Signup, SignupStatus, Student,
+    SubmissionStatus,
 )
-from app.services import audit, submissions
-from app.services.legion_auth import make_link_url
+from app.services import audit, opportunities as opp_service, submissions
 from app.services.reports import mentor_vhours_message, student_vhours_message
 from app.services.slack_client import open_modal, send_dm
 from app.utils import shift_length_hours
@@ -144,6 +144,8 @@ async def slack_interact(
             return await _handle_log_hours_submit(db, background_tasks, view, acting_slack_id)
         if cb == "review_hours":  # mentor's "Edit hours" modal
             return await _handle_review_edit_submit(db, background_tasks, view, acting_slack_id)
+        if cb == opp_service.SIGNUP_CALLBACK:  # announcement's "View & sign up" modal
+            return await _handle_opportunity_signup_submit(db, view, acting_slack_id)
         return Response(status_code=200)
 
     if ptype != "block_actions":
@@ -178,7 +180,11 @@ async def slack_interact(
 
     # ── Anyone opening an opportunity from the channel announcement ──
     if action_id == "opportunity_view":
-        return await _handle_opportunity_view(db, value, acting_slack_id, response_url)
+        # Inline, not a background task — `trigger_id` expires in ~3s (same reason
+        # `hours_adjust` opens its modal here rather than deferring).
+        return await _handle_opportunity_view(
+            db, value, acting_slack_id, payload.get("trigger_id", "")
+        )
 
     return Response(status_code=200)
 
@@ -224,70 +230,124 @@ async def _load_submission(db: AsyncSession, submission_id: int) -> Optional[Hou
 
 
 async def _handle_opportunity_view(
-    db: AsyncSession, value: str, acting_slack_id: str, response_url: str
+    db: AsyncSession, value: str, acting_slack_id: str, trigger_id: str
 ):
-    """The channel announcement's "🙋 View & sign up" button.
+    """The channel announcement's "🙋 View & sign up" button — opens a modal.
 
-    A shared-channel message can't carry a per-person link, but the *click* tells us who
-    clicked — so we mint that person a magic link and hand it back ephemerally. That's
-    what makes this work in Slack's in-app browser, which has no surviving `mw_sso` to
-    fall back on (see services/legion_auth.make_link_url).
+    A shared-channel message can't carry a per-person link (a plain `url` button is
+    rendered client-side and never reaches us, so it can't know who clicked), but the
+    *click* identifies the clicker. Opening a modal uses that identity without putting
+    anything in the channel: no message, no browser, no sign-in. The student picks a
+    shift and submits, handled by `_handle_opportunity_signup_submit`.
 
-    The reply MUST go out over `response_url` as `response_type: "ephemeral"`. Returning
-    a message body from a `block_actions` request replaces the *original* message —
-    which here is the announcement itself, visible to the whole channel.
-
-    Students and mentors both get through: a mentor is a read-only viewer of an
-    opportunity page (`_current_mentor` in routers/portal.py), and the announcement is
-    posted to a channel they're in too.
+    Mentors get the details read-only, matching their status on the opportunity page
+    (`_current_mentor` in routers/portal.py) — the announcement lands in a channel
+    they're in too, so the button must not dead-end them.
     """
-    from slack_sdk.webhook.async_client import AsyncWebhookClient
-
     try:
         opp_id = int(value)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid opportunity id")
+    if not trigger_id:
+        return Response(status_code=200)
 
-    member_code = None
-    if acting_slack_id:
-        student = (
+    opp = (
+        await db.execute(
+            select(Opportunity)
+            .options(selectinload(Opportunity.shifts))
+            .where(Opportunity.id == opp_id)
+        )
+    ).scalars().first()
+    if opp is None:
+        return Response(status_code=200)
+
+    student = (
+        await db.execute(
+            select(Student).where(
+                Student.slack_user_id == acting_slack_id, Student.is_active.is_(True)
+            )
+        )
+    ).scalars().first() if acting_slack_id else None
+
+    notice = None
+    shift_rows = None
+    if student is None:
+        mentor = (
             await db.execute(
-                select(Student).where(
-                    Student.slack_user_id == acting_slack_id, Student.is_active.is_(True)
+                select(Mentor).where(
+                    Mentor.slack_user_id == acting_slack_id, Mentor.is_active.is_(True)
                 )
             )
-        ).scalars().first()
-        if student is not None:
-            member_code = student.member_code
-        else:
-            mentor = (
-                await db.execute(
-                    select(Mentor).where(
-                        Mentor.slack_user_id == acting_slack_id, Mentor.is_active.is_(True)
-                    )
-                )
-            ).scalars().first()
-            if mentor is not None:
-                member_code = mentor.member_code
-
-    if member_code is None:
-        # Say so rather than no-op: a silent button is indistinguishable from a broken
-        # one, and "your Slack isn't linked yet" is something an admin can actually fix.
-        text = (
-            "❌ Your Slack account isn't linked to a Munus record yet, so I can't sign "
-            "you in. Please ask an admin to link it."
+        ).scalars().first() if acting_slack_id else None
+        # Name the reason rather than opening an empty form — "nothing happened" is
+        # indistinguishable from a broken button, and an unlinked account is fixable.
+        notice = (
+            "_Mentors don't sign up for shifts — this is just the details._"
+            if mentor is not None
+            else ("❌ Your Slack account isn't linked to a Munus student record yet. "
+                  "Please ask an admin to link it.")
         )
+    elif opp.is_continuous:
+        notice = "_This is an ongoing opportunity — no shifts to sign up for. Just log your hours when you've helped._"
     else:
-        text = (
-            f"<{make_link_url(member_code, f'/opportunities/{opp_id}')}"
-            "|🙋 Open this opportunity>"
-        )
+        shift_rows = await opp_service.shift_options_for_modal(db, opp, student.id)
+        if not shift_rows:
+            notice = "_No upcoming shifts on this opportunity right now._"
 
-    if response_url:
-        await AsyncWebhookClient(response_url).send(
-            text=text, response_type="ephemeral", replace_original=False
-        )
+    await open_modal(
+        trigger_id, opp_service.opportunity_signup_modal(opp, shift_rows, notice=notice)
+    )
     return Response(status_code=200)
+
+
+async def _handle_opportunity_signup_submit(db: AsyncSession, view: dict, acting_slack_id: str):
+    """Submission of the "View & sign up" modal — signs the student up for the shift
+    they picked, reusing the same `signup_student` the web portal calls so capacity and
+    duplicate handling can't drift between the two."""
+    try:
+        opp_id = int(view.get("private_metadata", ""))
+    except ValueError:
+        return Response(status_code=200)
+
+    selected = (
+        view.get("state", {}).get("values", {})
+        .get("shift", {}).get("value", {})
+        .get("selected_option") or {}
+    )
+    try:
+        shift_id = int(selected.get("value", ""))
+    except (TypeError, ValueError):
+        return _modal_error("shift", "Pick a shift.")
+
+    student = (
+        await db.execute(
+            select(Student).where(
+                Student.slack_user_id == acting_slack_id, Student.is_active.is_(True)
+            )
+        )
+    ).scalars().first() if acting_slack_id else None
+    if student is None:
+        return _modal_error("shift", "Your Slack account isn't linked to a student record.")
+
+    shift = (
+        await db.execute(
+            select(Shift).where(Shift.id == shift_id, Shift.opportunity_id == opp_id)
+        )
+    ).scalars().first()
+    if shift is None:
+        return _modal_error("shift", "That shift is no longer available.")
+
+    ok, message = await opp_service.signup_student(db, shift, student.id)
+    if not ok:
+        # Surface "full" / "already signed up" on the field itself — the modal stays
+        # open so they can pick another shift instead of losing the dialog.
+        return _modal_error("shift", message)
+    return Response(status_code=200)
+
+
+def _modal_error(block_id: str, message: str) -> JSONResponse:
+    """Keep a modal open with an inline error under `block_id` (Slack's `errors` action)."""
+    return JSONResponse({"response_action": "errors", "errors": {block_id: message}})
 
 
 async def _is_mentor(db: AsyncSession, acting_slack_id: str) -> bool:
