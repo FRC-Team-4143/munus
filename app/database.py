@@ -42,6 +42,7 @@ async def init_db() -> None:
         await conn.run_sync(_add_opportunity_is_continuous_column)
         await conn.run_sync(_add_opportunity_is_required_column)
         await conn.run_sync(_add_opportunity_announcement_columns)
+        await conn.run_sync(_add_shift_google_event_id_column)
 
     await _seed_level_requirements()
 
@@ -109,6 +110,17 @@ def _add_opportunity_announcement_columns(conn) -> None:
         conn.execute(text("ALTER TABLE opportunities ADD COLUMN announcement_channel_id VARCHAR(32)"))
     if "announcement_ts" not in columns:
         conn.execute(text("ALTER TABLE opportunities ADD COLUMN announcement_ts VARCHAR(32)"))
+
+
+def _add_shift_google_event_id_column(conn) -> None:
+    """Add `google_event_id` to shifts if not already present — the mapped Google
+    Calendar event id for a shift, so a later edit/delete targets the same event
+    instead of creating a duplicate. No-op on a fresh schema."""
+    from sqlalchemy import inspect, text
+    inspector = inspect(conn)
+    columns = [c["name"] for c in inspector.get_columns("shifts")]
+    if "google_event_id" not in columns:
+        conn.execute(text("ALTER TABLE shifts ADD COLUMN google_event_id VARCHAR(255)"))
 
 
 def _migration_drop_students_if_legacy_schema(conn) -> None:
