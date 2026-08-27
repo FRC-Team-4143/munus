@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     legion_base_url: str = ""     # e.g. "https://legion.marswars.org"
     legion_api_key: str = ""      # presented as X-API-Key to Legion's /api/* and /sso/challenge
 
+    # Google Calendar sync — pushes each Shift as a blocked-out event (opportunity name +
+    # time only, no description/location/attendees) onto a shared team calendar. The
+    # calendar must be shared with this service account's email with "Make changes to
+    # events" permission. Blank google_calendar_id = sync disabled.
+    google_calendar_id: str = ""
+    # Path to a Google service-account JSON key file. Deploy-time secret (not editable via
+    # the Admin Settings UI), same tier as SSO_SECRET/LEGION_API_KEY.
+    google_service_account_file: str = ""
+
     database_url: str = "sqlite+aiosqlite:///./munus.db"
 
     timezone: str = "America/New_York"

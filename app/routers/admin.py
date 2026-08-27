@@ -26,7 +26,8 @@ from app.models import (
 from app.services import audit, submissions as submission_service
 from app.services.app_settings import get_season_start, season_start_utc, set_season_start
 from app.services.opportunities import (
-    announce_opportunity, update_announcement, upcoming_signups_for_student,
+    announce_opportunity, remove_shift_calendar_event, sync_shift_calendar_event,
+    update_announcement, upcoming_signups_for_student,
 )
 from app.services.reports import (
     student_progress_report, student_submission_export_rows, student_vhours_message,
@@ -436,6 +437,7 @@ async def admin_opportunities_edit_post(
         )
     ).scalars().first()
     if opp:
+        name_changed = opp.name != name.strip()
         opp.name = name.strip()
         opp.description = description.strip() if description else None
         opp.location = location.strip() if location else None
@@ -449,6 +451,14 @@ async def admin_opportunities_edit_post(
         # Keep an already-posted announcement in sync with the edited details
         # (no-op if this opportunity was never announced — see update_announcement).
         await update_announcement(db, opp)
+        if name_changed:
+            # The calendar event's summary is the opportunity name — push it to every
+            # upcoming shift's event.
+            now = now_utc()
+            for shift in opp.shifts:
+                if shift.end_time >= now:
+                    shift.opportunity = opp
+                    await sync_shift_calendar_event(db, shift)
     return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
 
 
@@ -479,9 +489,12 @@ async def admin_opportunities_purge(opp_id: int, request: Request, db: AsyncSess
     opp = (await db.execute(select(Opportunity).where(Opportunity.id == opp_id))).scalars().first()
     if opp and not opp.is_active:
         name = opp.name
-        shift_ids = (
-            await db.execute(select(Shift.id).where(Shift.opportunity_id == opp_id))
+        shifts = (
+            await db.execute(select(Shift).where(Shift.opportunity_id == opp_id))
         ).scalars().all()
+        shift_ids = [s.id for s in shifts]
+        for shift in shifts:
+            await remove_shift_calendar_event(db, shift)
         # Delete every submission tied to the opportunity or any of its shifts.
         await db.execute(delete(HourSubmission).where(HourSubmission.opportunity_id == opp_id))
         if shift_ids:
@@ -576,14 +589,15 @@ async def admin_shift_create(
             select(func.count()).select_from(Shift).where(Shift.opportunity_id == opp_id)
         )
     ).scalar() == 0
-    db.add(Shift(
+    new_shift = Shift(
         opportunity_id=opp_id,
         start_time=start_dt,
         end_time=end_dt,
         capacity=capacity,
         notes=notes.strip() if notes else None,
         reviewer_mentor_id=_opt_id(reviewer_mentor_id),
-    ))
+    )
+    db.add(new_shift)
     await audit.record(db, request, "shift.create", f"Added shift to opportunity {opp_id}", entity_type="shift")
     await db.commit()
     # First shift: announce fresh. Any later shift: the date span the announcement
@@ -599,6 +613,8 @@ async def admin_shift_create(
             await announce_opportunity(db, opp)
         else:
             await update_announcement(db, opp)
+        new_shift.opportunity = opp
+        await sync_shift_calendar_event(db, new_shift)
     return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
 
 
@@ -641,6 +657,8 @@ async def admin_shift_edit(
     ).scalars().first()
     if opp:
         await update_announcement(db, opp)
+        shift.opportunity = opp
+        await sync_shift_calendar_event(db, shift)
     return RedirectResponse(f"/admin/opportunities/{shift.opportunity_id}/edit", status_code=303)
 
 
@@ -670,6 +688,7 @@ async def admin_shift_delete(shift_id: int, request: Request, db: AsyncSession =
     shift = (await db.execute(select(Shift).where(Shift.id == shift_id))).scalars().first()
     if shift:
         opp_id = shift.opportunity_id
+        await remove_shift_calendar_event(db, shift)
         await db.execute(delete(Shift).where(Shift.id == shift_id))
         await audit.record(db, request, "shift.delete", f"Deleted shift {shift_id}", entity_type="shift", entity_id=shift_id)
         await db.commit()

@@ -167,6 +167,10 @@ class Shift(Base):
     reviewer_mentor_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("mentors.id"), nullable=True
     )
+    # Google Calendar event id for this shift (services/google_calendar.py), or NULL if
+    # never synced (calendar sync disabled, or the create call failed). Lets a later
+    # edit/delete target the same event instead of creating a duplicate.
+    google_event_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     opportunity: Mapped["Opportunity"] = relationship("Opportunity", back_populates="shifts")
     signups: Mapped[List["Signup"]] = relationship(

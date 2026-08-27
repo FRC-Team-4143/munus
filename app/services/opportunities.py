@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models import Opportunity, Shift, Signup, SignupStatus
+from app.services.google_calendar import create_event, delete_event, update_event
 from app.services.slack_client import post_to_channel, update_channel_message
 from app.utils import format_date_range, format_shift_range, now_utc
 
@@ -377,3 +378,19 @@ async def update_announcement(db: AsyncSession, opp: Opportunity) -> Optional[bo
     return await update_channel_message(
         opp.announcement_channel_id, opp.announcement_ts, text, blocks=blocks
     )
+
+
+async def sync_shift_calendar_event(db: AsyncSession, shift: Shift) -> None:
+    """Create or update this shift's Google Calendar event (opportunity name + time
+    only). `shift.opportunity` must already be loaded. No-op if calendar sync isn't
+    configured — see services/google_calendar.py."""
+    if shift.google_event_id:
+        await update_event(db, shift)
+    else:
+        await create_event(db, shift)
+
+
+async def remove_shift_calendar_event(db: AsyncSession, shift: Shift) -> None:
+    """Delete this shift's Google Calendar event, if any. No-op if calendar sync isn't
+    configured — see services/google_calendar.py."""
+    await delete_event(db, shift)
