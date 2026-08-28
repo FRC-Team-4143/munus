@@ -60,6 +60,23 @@ def _opt_id(raw: Optional[str]) -> Optional[int]:
     return int(raw) if raw and str(raw).strip() else None
 
 
+def _mention_or_name(name: str, slack_user_id: Optional[str]) -> str:
+    """Slack mrkdwn `<@id>` mention when linked, else the plain name."""
+    return f"<@{slack_user_id}>" if slack_user_id else name
+
+
+def _message_signature(request: Request, approver: Optional[Mentor]) -> str:
+    """Two-line Slack mrkdwn signature appended to an admin-authored custom message: who
+    sent it (the signed-in SSO identity) and, if one is configured, the shift's/
+    opportunity's approver — so the student knows who to ask a follow-up question."""
+    identity = sso_identity(request) or {}
+    sender_name = identity.get("name") or identity.get("username") or "An admin"
+    lines = [f"*Sent by:* {_mention_or_name(sender_name, identity.get('slack_user_id'))}"]
+    if approver:
+        lines.append(f"*Approver:* {_mention_or_name(approver.name, approver.slack_user_id)}")
+    return "\n".join(lines)
+
+
 def _range_slug(date_from: Optional[date], date_to: Optional[date]) -> str:
     """Filename fragment for an export's date range — 'all-time' when unbounded."""
     if not date_from and not date_to:
@@ -582,9 +599,14 @@ async def admin_opportunities_message(
     upcoming_ids = [s.id for s in opp.shifts if s.end_time >= now_utc()]
     students = await signed_up_students(db, upcoming_ids)
 
+    approver = None
+    if opp.reviewer_mentor_id:
+        approver = (await db.execute(select(Mentor).where(Mentor.id == opp.reviewer_mentor_id))).scalars().first()
+    full_text = f"{message}\n\n{_message_signature(request, approver)}"
+
     sent = 0
     for student in students:
-        await send_dm(student.slack_user_id, message)
+        await send_dm(student.slack_user_id, full_text)
         sent += 1
 
     await audit.record(
@@ -749,7 +771,9 @@ async def admin_shift_message(
     if redirect := _require_auth(request):
         return redirect
 
-    shift = (await db.execute(select(Shift).where(Shift.id == shift_id))).scalars().first()
+    shift = (
+        await db.execute(select(Shift).options(selectinload(Shift.opportunity)).where(Shift.id == shift_id))
+    ).scalars().first()
     if not shift:
         return RedirectResponse("/admin/opportunities", status_code=303)
 
@@ -760,9 +784,16 @@ async def admin_shift_message(
         )
 
     students = await signed_up_students(db, [shift_id])
+
+    reviewer_id = submission_service.resolve_reviewer_id(shift)
+    approver = None
+    if reviewer_id:
+        approver = (await db.execute(select(Mentor).where(Mentor.id == reviewer_id))).scalars().first()
+    full_text = f"{message}\n\n{_message_signature(request, approver)}"
+
     sent = 0
     for student in students:
-        await send_dm(student.slack_user_id, message)
+        await send_dm(student.slack_user_id, full_text)
         sent += 1
 
     await audit.record(

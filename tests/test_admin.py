@@ -235,7 +235,39 @@ async def test_opportunity_message_dms_upcoming_signups_custom_text(
     assert resp.status_code == 303
     assert "messaged=1" in resp.headers["location"]
     assert len(calls) == 1
-    assert calls[0] == ("U0STU", "Bring gloves tomorrow!")
+    # No reviewer configured on the opportunity -> signed with the sender only.
+    assert calls[0] == ("U0STU", "Bring gloves tomorrow!\n\n*Sent by:* Test Admin")
+
+
+async def test_opportunity_message_signs_with_mentioned_sender_and_approver(
+    client, db, monkeypatch, make_student, make_mentor, make_opportunity, make_shift
+):
+    import app.routers.admin as adminmod
+    from app.models import Signup, SignupStatus
+
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None):
+        calls.append((uid, text))
+        return "ts"
+
+    monkeypatch.setattr(adminmod, "send_dm", fake_send_dm)
+
+    await _login(client, slack_user_id="U0ADMIN")
+    student = await make_student(slack="U0STU")
+    mentor = await make_mentor(name="Coach Ray", slack="U0MENTOR")
+    opp = await make_opportunity(name="Food Drive", reviewer_mentor_id=mentor.id)
+    shift = await make_shift(opp.id, start_in_hours=24)
+    db.add(Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    resp = await client.post(
+        f"/admin/opportunities/{opp.id}/message", data={"message": "Bring gloves!"}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert calls[0] == (
+        "U0STU", "Bring gloves!\n\n*Sent by:* <@U0ADMIN>\n*Approver:* <@U0MENTOR>"
+    )
 
 
 async def test_opportunity_message_rejects_blank_message(client, make_opportunity):
@@ -279,7 +311,42 @@ async def test_shift_message_dms_only_that_shifts_signups(
     assert f"/admin/opportunities/{opp.id}/edit" in resp.headers["location"]
     assert "messaged=1" in resp.headers["location"]
     assert len(calls) == 1
-    assert calls[0] == ("U0ONSHIFT", "Meet at the loading dock")
+    # No reviewer configured -> signed with the sender only.
+    assert calls[0] == ("U0ONSHIFT", "Meet at the loading dock\n\n*Sent by:* Test Admin")
+
+
+async def test_shift_message_uses_shifts_own_reviewer_override(
+    client, db, monkeypatch, make_student, make_mentor, make_opportunity, make_shift
+):
+    """A shift-specific approver override should win over the opportunity's default
+    approver, mirroring resolve_reviewer_id's own precedence."""
+    import app.routers.admin as adminmod
+    from app.models import Signup, SignupStatus
+
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None):
+        calls.append((uid, text))
+        return "ts"
+
+    monkeypatch.setattr(adminmod, "send_dm", fake_send_dm)
+
+    await _login(client)
+    student = await make_student(slack="U0STU")
+    default_mentor = await make_mentor(name="Default Mentor", slack="U0DEFAULT")
+    override_mentor = await make_mentor(name="Override Mentor", slack=None, code="ov000001")
+    opp = await make_opportunity(name="Food Drive", reviewer_mentor_id=default_mentor.id)
+    shift = await make_shift(opp.id, start_in_hours=24)
+    shift.reviewer_mentor_id = override_mentor.id
+    db.add(Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    resp = await client.post(
+        f"/admin/shifts/{shift.id}/message", data={"message": "Heads up"}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    # Override mentor has no linked Slack account -> falls back to plain name.
+    assert calls[0] == ("U0STU", "Heads up\n\n*Sent by:* Test Admin\n*Approver:* Override Mentor")
 
 
 async def test_opportunities_list_hides_notify_and_message_for_continuous(client, make_opportunity):
