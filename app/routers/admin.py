@@ -26,8 +26,8 @@ from app.models import (
 from app.services import audit, submissions as submission_service
 from app.services.app_settings import get_season_start, season_start_utc, set_season_start
 from app.services.opportunities import (
-    announce_opportunity, remove_shift_calendar_event, sync_shift_calendar_event,
-    update_announcement, upcoming_signups_for_student,
+    announce_opportunity, remove_shift_calendar_event, signed_up_students,
+    sync_shift_calendar_event, update_announcement, upcoming_signups_for_student,
 )
 from app.services.reports import (
     student_progress_report, student_submission_export_rows, student_vhours_message,
@@ -58,6 +58,23 @@ templates.env.filters["levellabel"] = level_label
 def _opt_id(raw: Optional[str]) -> Optional[int]:
     """Parse an optional integer form field (e.g. a mentor dropdown), '' -> None."""
     return int(raw) if raw and str(raw).strip() else None
+
+
+def _mention_or_name(name: str, slack_user_id: Optional[str]) -> str:
+    """Slack mrkdwn `<@id>` mention when linked, else the plain name."""
+    return f"<@{slack_user_id}>" if slack_user_id else name
+
+
+def _message_signature(request: Request, approver: Optional[Mentor]) -> str:
+    """Two-line Slack mrkdwn signature appended to an admin-authored custom message: who
+    sent it (the signed-in SSO identity) and, if one is configured, the shift's/
+    opportunity's approver — so the student knows who to ask a follow-up question."""
+    identity = sso_identity(request) or {}
+    sender_name = identity.get("name") or identity.get("username") or "An admin"
+    lines = [f"*Sent by:* {_mention_or_name(sender_name, identity.get('slack_user_id'))}"]
+    if approver:
+        lines.append(f"*Approver:* {_mention_or_name(approver.name, approver.slack_user_id)}")
+    return "\n".join(lines)
 
 
 def _range_slug(date_from: Optional[date], date_to: Optional[date]) -> str:
@@ -560,6 +577,47 @@ async def admin_opportunities_notify(opp_id: int, request: Request, db: AsyncSes
     return RedirectResponse(f"/admin/opportunities?notified={sent}", status_code=303)
 
 
+@router.post("/opportunities/{opp_id}/message")
+async def admin_opportunities_message(
+    opp_id: int, request: Request, message: str = Form(...), db: AsyncSession = Depends(get_db)
+):
+    """DM a custom admin-written message to every student signed up for this
+    opportunity's upcoming shifts (one DM per student, plain text as typed)."""
+    if redirect := _require_auth(request):
+        return redirect
+
+    opp = (
+        await db.execute(select(Opportunity).options(selectinload(Opportunity.shifts)).where(Opportunity.id == opp_id))
+    ).scalars().first()
+    if not opp:
+        return RedirectResponse("/admin/opportunities", status_code=303)
+
+    message = message.strip()
+    if not message:
+        return RedirectResponse("/admin/opportunities?error=Message+cannot+be+blank.", status_code=303)
+
+    upcoming_ids = [s.id for s in opp.shifts if s.end_time >= now_utc()]
+    students = await signed_up_students(db, upcoming_ids)
+
+    approver = None
+    if opp.reviewer_mentor_id:
+        approver = (await db.execute(select(Mentor).where(Mentor.id == opp.reviewer_mentor_id))).scalars().first()
+    full_text = f"{message}\n\n{_message_signature(request, approver)}"
+
+    sent = 0
+    for student in students:
+        await send_dm(student.slack_user_id, full_text)
+        sent += 1
+
+    await audit.record(
+        db, request, "opportunity.message",
+        f"Sent custom message for {opp.name} to {sent} student(s)",
+        entity_type="opportunity", entity_id=opp_id, detail={"message": message},
+    )
+    await db.commit()
+    return RedirectResponse(f"/admin/opportunities?messaged={sent}", status_code=303)
+
+
 @router.post("/opportunities/{opp_id}/shifts")
 async def admin_shift_create(
     opp_id: int,
@@ -703,6 +761,48 @@ async def admin_shift_delete(shift_id: int, request: Request, db: AsyncSession =
             await update_announcement(db, opp)
         return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
     return RedirectResponse("/admin/opportunities", status_code=303)
+
+
+@router.post("/shifts/{shift_id}/message")
+async def admin_shift_message(
+    shift_id: int, request: Request, message: str = Form(...), db: AsyncSession = Depends(get_db)
+):
+    """DM a custom admin-written message to every student signed up for this shift."""
+    if redirect := _require_auth(request):
+        return redirect
+
+    shift = (
+        await db.execute(select(Shift).options(selectinload(Shift.opportunity)).where(Shift.id == shift_id))
+    ).scalars().first()
+    if not shift:
+        return RedirectResponse("/admin/opportunities", status_code=303)
+
+    message = message.strip()
+    if not message:
+        return RedirectResponse(
+            f"/admin/opportunities/{shift.opportunity_id}/edit?error=Message+cannot+be+blank.", status_code=303
+        )
+
+    students = await signed_up_students(db, [shift_id])
+
+    reviewer_id = submission_service.resolve_reviewer_id(shift)
+    approver = None
+    if reviewer_id:
+        approver = (await db.execute(select(Mentor).where(Mentor.id == reviewer_id))).scalars().first()
+    full_text = f"{message}\n\n{_message_signature(request, approver)}"
+
+    sent = 0
+    for student in students:
+        await send_dm(student.slack_user_id, full_text)
+        sent += 1
+
+    await audit.record(
+        db, request, "shift.message",
+        f"Sent custom message for shift {shift_id} to {sent} student(s)",
+        entity_type="shift", entity_id=shift_id, detail={"message": message},
+    )
+    await db.commit()
+    return RedirectResponse(f"/admin/opportunities/{shift.opportunity_id}/edit?messaged={sent}", status_code=303)
 
 
 @router.post("/shifts/{shift_id}/signups/{signup_id}/remove")

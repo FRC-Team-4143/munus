@@ -15,6 +15,14 @@
 </div>
 {% endif %}
 
+{% if request.query_params.get('messaged') is not none %}
+<div class="alert alert-success alert-dismissible fade show py-2" role="alert">
+  <i class="bi bi-chat-dots me-1"></i>
+  Sent your message to {{ request.query_params.get('messaged') }} signed-up student(s) with a Slack ID.
+  <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
 <div class="row g-4">
   <!-- Metadata -->
   <div class="col-lg-5">
@@ -112,6 +120,10 @@
                 </form>
               </td>
               <td class="text-end text-nowrap">
+                <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#messageShift{{ s.id }}"
+                        title="Send a custom Slack DM to students signed up for this shift">
+                  <i class="bi bi-chat-dots"></i>
+                </button>
                 <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#editShift{{ s.id }}">
                   <i class="bi bi-pencil"></i>
                 </button>
@@ -157,6 +169,30 @@
 </div>
 
 {% for s in shifts %}
+<div class="modal fade" id="messageShift{{ s.id }}" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="/admin/shifts/{{ s.id }}/message">
+        <div class="modal-header"><h5 class="modal-title">Message students signed up for this shift</h5></div>
+        <div class="modal-body">
+          <label class="form-label">Message</label>
+          <textarea name="message" class="form-control" rows="4" required
+                    placeholder="Message to send..."></textarea>
+          {% if counts[s.id] %}
+          <small class="text-muted">{{ counts[s.id] }} student(s) will receive this as a Slack DM.</small>
+          {% else %}
+          <small class="text-muted">No one is signed up for this shift yet — there's no one to send this to.</small>
+          {% endif %}
+          <small class="text-muted d-block mt-1">Your name (and this shift's approver, if any) will be added automatically.</small>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" {% if not counts[s.id] %}disabled{% endif %}>Send</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
 <div class="modal fade" id="editShift{{ s.id }}" tabindex="-1">
   <div class="modal-dialog">
     <div class="modal-content">
