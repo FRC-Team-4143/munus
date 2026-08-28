@@ -204,6 +204,98 @@ async def test_opportunity_notify_dms_upcoming_signups(
     assert "Team polo" in calls[0][1]  # attire included
 
 
+async def test_opportunity_message_dms_upcoming_signups_custom_text(
+    client, db, monkeypatch, make_student, make_opportunity, make_shift
+):
+    import app.routers.admin as adminmod
+    from app.models import Signup, SignupStatus
+
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None):
+        calls.append((uid, text))
+        return "ts"
+
+    monkeypatch.setattr(adminmod, "send_dm", fake_send_dm)
+
+    await _login(client)
+    student = await make_student(slack="U0STU")
+    opp = await make_opportunity(name="Food Drive")
+    upcoming = await make_shift(opp.id, start_in_hours=24)
+    past = await make_shift(opp.id, start_in_hours=-48)  # ended → not included
+    db.add(Signup(shift_id=upcoming.id, student_id=student.id, status=SignupStatus.signed_up))
+    db.add(Signup(shift_id=past.id, student_id=student.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    resp = await client.post(
+        f"/admin/opportunities/{opp.id}/message",
+        data={"message": "Bring gloves tomorrow!"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert "messaged=1" in resp.headers["location"]
+    assert len(calls) == 1
+    assert calls[0] == ("U0STU", "Bring gloves tomorrow!")
+
+
+async def test_opportunity_message_rejects_blank_message(client, make_opportunity):
+    await _login(client)
+    opp = await make_opportunity(name="Food Drive")
+    resp = await client.post(
+        f"/admin/opportunities/{opp.id}/message", data={"message": "   "}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert "error=" in resp.headers["location"]
+
+
+async def test_shift_message_dms_only_that_shifts_signups(
+    client, db, monkeypatch, make_student, make_opportunity, make_shift
+):
+    import app.routers.admin as adminmod
+    from app.models import Signup, SignupStatus
+
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None):
+        calls.append((uid, text))
+        return "ts"
+
+    monkeypatch.setattr(adminmod, "send_dm", fake_send_dm)
+
+    await _login(client)
+    on_shift = await make_student(name="On Shift", code="on000001", slack="U0ONSHIFT")
+    other_shift_student = await make_student(name="Other Shift", code="ot000001", slack="U0OTHER")
+    opp = await make_opportunity(name="Food Drive")
+    shift = await make_shift(opp.id, start_in_hours=24)
+    other_shift = await make_shift(opp.id, start_in_hours=48)
+    db.add(Signup(shift_id=shift.id, student_id=on_shift.id, status=SignupStatus.signed_up))
+    db.add(Signup(shift_id=other_shift.id, student_id=other_shift_student.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    resp = await client.post(
+        f"/admin/shifts/{shift.id}/message", data={"message": "Meet at the loading dock"}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    assert f"/admin/opportunities/{opp.id}/edit" in resp.headers["location"]
+    assert "messaged=1" in resp.headers["location"]
+    assert len(calls) == 1
+    assert calls[0] == ("U0ONSHIFT", "Meet at the loading dock")
+
+
+async def test_opportunities_list_hides_notify_and_message_for_continuous(client, make_opportunity):
+    await _login(client)
+    await make_opportunity(name="Ongoing Restock", is_continuous=True)
+    page = await client.get("/admin/opportunities")
+    assert page.status_code == 200
+    assert "Ongoing Restock" in page.text
+    body = page.text
+    start = body.index("Ongoing Restock")
+    end = body.index("</tr>", start)
+    row = body[start:end]
+    assert "/notify" not in row
+    assert "/message" not in row
+
+
 def test_manager_allowed_excludes_purge():
     """Managers may create/manage opportunities and shifts, but the irreversible purge is
     admin-only — it deletes hour submissions, so it doesn't belong in the manager scope."""

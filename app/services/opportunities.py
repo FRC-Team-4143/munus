@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.models import Opportunity, Shift, Signup, SignupStatus
+from app.models import Opportunity, Shift, Signup, SignupStatus, Student
 from app.services.google_calendar import create_event, delete_event, update_event
 from app.services.slack_client import post_to_channel, update_channel_message
 from app.utils import format_date_range, format_shift_range, now_utc
@@ -106,6 +106,26 @@ async def get_signup(db: AsyncSession, shift_id: int, student_id: int) -> Option
             )
         )
     ).scalars().first()
+
+
+async def signed_up_students(db: AsyncSession, shift_ids: list[int]) -> list[Student]:
+    """Distinct students currently signed up (not cancelled) for any of the given
+    shifts, filtered to those with a linked Slack account. Shared by the admin's
+    Notify and custom-Message DM actions."""
+    if not shift_ids:
+        return []
+    signups = (
+        await db.execute(
+            select(Signup)
+            .options(selectinload(Signup.student))
+            .where(Signup.shift_id.in_(shift_ids), Signup.status == SignupStatus.signed_up)
+        )
+    ).scalars().all()
+    seen: dict[int, Student] = {}
+    for su in signups:
+        if su.student and su.student.slack_user_id:
+            seen[su.student_id] = su.student
+    return list(seen.values())
 
 
 async def signup_student(db: AsyncSession, shift: Shift, student_id: int) -> tuple[bool, str]:

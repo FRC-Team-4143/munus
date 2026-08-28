@@ -26,8 +26,8 @@ from app.models import (
 from app.services import audit, submissions as submission_service
 from app.services.app_settings import get_season_start, season_start_utc, set_season_start
 from app.services.opportunities import (
-    announce_opportunity, remove_shift_calendar_event, sync_shift_calendar_event,
-    update_announcement, upcoming_signups_for_student,
+    announce_opportunity, remove_shift_calendar_event, signed_up_students,
+    sync_shift_calendar_event, update_announcement, upcoming_signups_for_student,
 )
 from app.services.reports import (
     student_progress_report, student_submission_export_rows, student_vhours_message,
@@ -560,6 +560,42 @@ async def admin_opportunities_notify(opp_id: int, request: Request, db: AsyncSes
     return RedirectResponse(f"/admin/opportunities?notified={sent}", status_code=303)
 
 
+@router.post("/opportunities/{opp_id}/message")
+async def admin_opportunities_message(
+    opp_id: int, request: Request, message: str = Form(...), db: AsyncSession = Depends(get_db)
+):
+    """DM a custom admin-written message to every student signed up for this
+    opportunity's upcoming shifts (one DM per student, plain text as typed)."""
+    if redirect := _require_auth(request):
+        return redirect
+
+    opp = (
+        await db.execute(select(Opportunity).options(selectinload(Opportunity.shifts)).where(Opportunity.id == opp_id))
+    ).scalars().first()
+    if not opp:
+        return RedirectResponse("/admin/opportunities", status_code=303)
+
+    message = message.strip()
+    if not message:
+        return RedirectResponse("/admin/opportunities?error=Message+cannot+be+blank.", status_code=303)
+
+    upcoming_ids = [s.id for s in opp.shifts if s.end_time >= now_utc()]
+    students = await signed_up_students(db, upcoming_ids)
+
+    sent = 0
+    for student in students:
+        await send_dm(student.slack_user_id, message)
+        sent += 1
+
+    await audit.record(
+        db, request, "opportunity.message",
+        f"Sent custom message for {opp.name} to {sent} student(s)",
+        entity_type="opportunity", entity_id=opp_id, detail={"message": message},
+    )
+    await db.commit()
+    return RedirectResponse(f"/admin/opportunities?messaged={sent}", status_code=303)
+
+
 @router.post("/opportunities/{opp_id}/shifts")
 async def admin_shift_create(
     opp_id: int,
@@ -703,6 +739,39 @@ async def admin_shift_delete(shift_id: int, request: Request, db: AsyncSession =
             await update_announcement(db, opp)
         return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
     return RedirectResponse("/admin/opportunities", status_code=303)
+
+
+@router.post("/shifts/{shift_id}/message")
+async def admin_shift_message(
+    shift_id: int, request: Request, message: str = Form(...), db: AsyncSession = Depends(get_db)
+):
+    """DM a custom admin-written message to every student signed up for this shift."""
+    if redirect := _require_auth(request):
+        return redirect
+
+    shift = (await db.execute(select(Shift).where(Shift.id == shift_id))).scalars().first()
+    if not shift:
+        return RedirectResponse("/admin/opportunities", status_code=303)
+
+    message = message.strip()
+    if not message:
+        return RedirectResponse(
+            f"/admin/opportunities/{shift.opportunity_id}/edit?error=Message+cannot+be+blank.", status_code=303
+        )
+
+    students = await signed_up_students(db, [shift_id])
+    sent = 0
+    for student in students:
+        await send_dm(student.slack_user_id, message)
+        sent += 1
+
+    await audit.record(
+        db, request, "shift.message",
+        f"Sent custom message for shift {shift_id} to {sent} student(s)",
+        entity_type="shift", entity_id=shift_id, detail={"message": message},
+    )
+    await db.commit()
+    return RedirectResponse(f"/admin/opportunities/{shift.opportunity_id}/edit?messaged={sent}", status_code=303)
 
 
 @router.post("/shifts/{shift_id}/signups/{signup_id}/remove")
