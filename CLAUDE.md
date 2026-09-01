@@ -330,13 +330,17 @@ restoring (`admin_opportunities_archive`) and the auto-archive job
 right after flipping `is_active` — same no-op-if-never-announced rule as any other edit.
 An archived opportunity (either type) gets a "🗄️ Archived — no longer accepting signups
 or hours" line in place of the required/ongoing flags (showing both would read as
-contradictory) and a "🗄️ Archived" button, still interactive but routed by
-`_handle_opportunity_view` to a notice-only `opportunity_signup_modal` for *anyone* who
-clicks it, regardless of role or opportunity type — no shift picker, no log-hours form.
-Restoring flips all of this back, since it's just re-rendering `opp`'s current state.
-The submit handlers check `is_active` too, independently of the button routing — a
-form already open in someone's hand when the archive happens gets rejected rather than
-silently accepted (a visible modal error for log-hours; "that shift is no longer
+contradictory) and **no button at all** — the flag already says there's nothing to do,
+so a live-looking button leading to a modal repeating the same sentence would just be a
+dead end. `_handle_opportunity_view` still handles the archived case defensively (routed
+to a notice-only `opportunity_signup_modal` for *anyone*, regardless of role or
+opportunity type — no shift picker, no log-hours form): a stale Slack client can fire
+the old `block_actions` payload for a button it rendered before the message was updated,
+even though a freshly-rendered message never has one to tap. Restoring flips all of this
+back, since it's just re-rendering `opp`'s current state. The submit handlers check
+`is_active` too, independently of the button — a form already open in someone's hand
+when the archive happens gets rejected rather than silently accepted (a visible modal
+error for log-hours; "that shift is no longer
 available" for signup, via the same `Opportunity.is_active` join the web portal's
 `/shifts/{id}/signup` uses) — closing a gap that, for shift-based signups, existed on
 both surfaces even before archiving got wired into the announcement.

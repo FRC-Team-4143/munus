@@ -171,14 +171,17 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     for why a shared-channel message can't personalize a `url` button, and why a modal
     rather than a reply.
 
-    An **archived** opportunity (either type) instead gets a "🗄️ Archived" button and an
+    An **archived** opportunity (either type) instead drops the button entirely and shows a
     "🗄️ Archived — no longer accepting signups or hours" line in place of the
-    required/ongoing flags (never both — that'd read as contradictory).
-    `routers.slack._handle_opportunity_view` opens a notice-only `opportunity_signup_modal`
-    for it regardless of type, rather than the real signup/log-hours form. Archiving
-    (`admin_opportunities_archive`) and the auto-archive job both call
-    `update_announcement` afterward so an already-posted message picks this up —
-    otherwise it would keep advertising a closed opportunity indefinitely.
+    required/ongoing flags (never both — that'd read as contradictory): the flag already
+    says there's nothing to do here, so a live-looking button leading to a modal that
+    repeats the same sentence is just a dead end. `routers.slack._handle_opportunity_view`
+    still handles the archived case defensively — a stale Slack client can fire the old
+    `block_actions` payload for a button it rendered before this message was updated —
+    routing it to a notice-only `opportunity_signup_modal` rather than the real
+    signup/log-hours form. Archiving (`admin_opportunities_archive`) and the auto-archive
+    job both call `update_announcement` afterward so an already-posted message picks
+    this up — otherwise it would keep advertising a closed opportunity indefinitely.
 
     It was briefly a plain `url` button straight to the opportunity page, on the
     reasoning that it was one tap for anyone holding a live session and only cost the
@@ -240,25 +243,27 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     blocks = [{"type": "header", "text": {"type": "plain_text", "text": title, "emoji": True}}]
     if body:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": body}})
-    if opp.is_active is False:
-        button_text = "🗄️ Archived"
-    elif opp.is_continuous:
-        button_text = "📝 View & record hours"
-    else:
-        button_text = "🙋 View & sign up"
-    blocks.append(
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": button_text, "emoji": True},
-                    "action_id": "opportunity_view",
-                    "value": str(opp.id),
-                }
-            ],
-        }
-    )
+    if opp.is_active is not False:
+        # No button at all once archived — the "🗄️ Archived" flag above already says
+        # there's nothing to do here, so a button leading to a modal that repeats the
+        # same sentence is just a dead end wearing a live-looking control. The
+        # is_active guards in _handle_opportunity_view and both submit handlers stay in
+        # place regardless: a stale Slack client can still fire the old block_actions
+        # payload for a button it rendered before this message was updated.
+        button_text = "📝 View & record hours" if opp.is_continuous else "🙋 View & sign up"
+        blocks.append(
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": button_text, "emoji": True},
+                        "action_id": "opportunity_view",
+                        "value": str(opp.id),
+                    }
+                ],
+            }
+        )
     return text, blocks
 
 

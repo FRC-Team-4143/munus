@@ -290,9 +290,11 @@ async def _handle_opportunity_view(
     there's nothing to sign up for — and instead gets `opportunity_log_hours_modal`,
     handled by `_handle_opportunity_log_hours_submit`.
 
-    An **archived** opportunity (either type) short-circuits before any of that — same
-    notice-only modal for everyone, since there's nothing to sign up for or log hours
-    against once it's closed.
+    An **archived** opportunity (either type) short-circuits before any of that. The
+    announcement drops its button entirely once archived, so this only fires from a
+    stale Slack client that rendered the button before the message was updated — still
+    worth a real notice-only modal rather than a bare 200, since "nothing happened" on
+    a tap someone actually made is indistinguishable from a broken button.
     """
     try:
         opp_id = int(value)
