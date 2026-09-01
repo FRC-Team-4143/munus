@@ -49,6 +49,22 @@ def test_announcement_omits_required_flag_when_not_required():
     assert "Required" not in text
 
 
+def test_announcement_flags_continuous_opportunity_as_ongoing():
+    """No shifts to wait for, and none to sign up for — call that out the same way the
+    required flag calls out its own condition, rather than leaving it to the button
+    label alone."""
+    opp = Opportunity(id=1, name="CAD Subteam", is_continuous=True)
+    text, blocks = opportunity_announcement_blocks(opp)
+    assert "Ongoing" in text
+    assert blocks[1]["text"]["text"] == "🔄 *Ongoing — no shifts here, log hours anytime you help out.*"
+
+
+def test_announcement_omits_ongoing_flag_for_shift_based_opportunity():
+    opp = Opportunity(id=1, name="Food Drive", is_continuous=False)
+    text, _ = opportunity_announcement_blocks(opp)
+    assert "Ongoing" not in text
+
+
 def test_announcement_header_truncates_long_names():
     """Slack's `header` block is plain_text and capped at 150 characters — a long
     opportunity name plus the "New volunteer opportunity:" prefix can exceed that."""

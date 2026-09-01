@@ -198,8 +198,8 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     if len(title) > 150:
         title = title[:149] + "…"
 
-    # Blank lines between groups (required flag/description/bullets) so Slack renders
-    # them as separate paragraphs instead of one dense block; single "\n" within a
+    # Blank lines between groups (required/continuous flag, description, bullets) so
+    # Slack renders them as separate paragraphs instead of one dense block; single "\n" within a
     # group keeps its lines (e.g. the info bullets) tight against each other.
     groups = []
     if opp.is_required:
@@ -207,6 +207,8 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
         # normalizes it to False for a continuous one on both create and edit, so this
         # copy never needs continuous-specific wording.
         groups.append("🚨 *Required — every active student must sign up for at least 1 shift.*")
+    if opp.is_continuous:
+        groups.append("🔄 *Ongoing — no shifts here, log hours anytime you help out.*")
     if opp.description:
         groups.append(opp.description)
     if info:

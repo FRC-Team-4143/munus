@@ -246,9 +246,12 @@ continuous one (there are no shifts to sign up for — logging hours directly *i
 action). The title renders in its own `header` block (Slack's
 only way to get larger text — mrkdwn `section` text has no font-size control), which
 means it's `plain_text` only and capped at 150 chars; `opportunity_announcement_blocks`
-truncates with `…` if `opp.name` pushes it over. The required flag, description, and
-info bullets (location/date/attire) live in a separate `section` block below it, each
-its own paragraph (blank `\n\n` line) so they don't read as one dense block.
+truncates with `…` if `opp.name` pushes it over. The required flag (🚨) and the ongoing
+flag (🔄) are mutually exclusive — `is_required` is always False on a continuous
+opportunity (`routers/admin.py` normalizes it on both create and edit, disabling the
+checkbox client-side too) — followed by description and info bullets (location/date/
+attire), all in a separate `section` block below the header, each its own paragraph
+(blank `\n\n` line) so they don't read as one dense block.
 
 **Clicking it opens a modal — it posts nothing.** A shared-channel message can't carry
 a per-person link (a `url` button is rendered client-side and never reaches our server,
