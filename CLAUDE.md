@@ -276,6 +276,12 @@ Notes:
   Slack's `response_action: errors`, keeping the modal open so they can pick again; bad
   hours (non-numeric, ≤ 0) on either modal does the same. `private_metadata` is
   attacker-controlled like any form field, hence the shift-belongs-to-opportunity check.
+- A student can join more than one shift on the same opportunity — `signup_student` only
+  blocks a duplicate on the *same* shift, and the channel button stays tappable after a
+  signup rather than being consumed by one. `opportunity_signup_modal` calls out any
+  shift the student's already joined by name, above the picker, using the `signed_up`
+  flag `shift_options_for_modal` already computes — not just the "✅ signed up" suffix
+  on that option in the dropdown, which is easy to miss before picking a second shift.
 - **All of** `opportunity_view` (action), `opportunity_signup`, and `opportunity_log_hours`
   (callbacks) must stay registered in Legion's `routers/slack_dispatch.py` — unrouted ids
   are swallowed with a 200, so a missing entry silently drops the click or the submission.

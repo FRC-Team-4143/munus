@@ -285,6 +285,13 @@ def opportunity_signup_modal(
     by and shown to exactly one person. Rendered as a section link rather than a `url`
     button on purpose: Slack sends an interaction payload for url buttons that has to be
     acked, and a plain link needs our server not at all.
+
+    A student can join more than one shift on the same opportunity — `signup_student`
+    only blocks a duplicate on the *same* shift, and the channel button stays tappable
+    after a signup, not consumed by one. `shift_rows` (from `shift_options_for_modal`)
+    already flags each already-joined shift with `signed_up`; when any are, this calls
+    that out by name above the picker rather than just marking it "✅ signed up" among
+    the options, where it's easy to miss before picking a second one.
     """
     blocks: list[dict] = []
     details = []
@@ -301,6 +308,16 @@ def opportunity_signup_modal(
         details.append("\n".join(info))
     if details:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n\n".join(details)}})
+
+    joined = [r for r in (shift_rows or []) if r["signed_up"]]
+    if joined:
+        ranges = "\n".join(
+            f"• {format_shift_range(r['shift'].start_time, r['shift'].end_time)}" for r in joined
+        )
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"✅ *You're already signed up for:*\n{ranges}"},
+        })
 
     if notice:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": notice}})

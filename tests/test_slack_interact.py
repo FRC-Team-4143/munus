@@ -437,6 +437,43 @@ async def test_modal_marks_full_and_already_signed_up_shifts(
     assert "FULL" in labels[str(full.id)]
 
 
+async def test_modal_calls_out_shifts_the_student_already_joined(
+    client, db, capture_modal, make_student, make_opportunity, make_shift
+):
+    """A student can join more than one shift on an opportunity — the already-joined
+    ones get their own callout above the picker, not just a label buried in the
+    dropdown, since the channel button stays tappable for picking a second shift."""
+    student = await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity()
+    joined = await make_shift(opp.id, start_in_hours=24)
+    open_shift = await make_shift(opp.id, start_in_hours=48)
+    db.add(Signup(shift_id=joined.id, student_id=student.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    await _interact(client, _view_payload("U0STU", opp.id))
+
+    (view,) = capture_modal
+    text = _modal_text(view)
+    assert "You're already signed up for" in text
+    from app.utils import format_shift_range
+    assert format_shift_range(joined.start_time, joined.end_time) in text
+    # The other, still-open shift isn't mistaken for one they've joined.
+    assert format_shift_range(open_shift.start_time, open_shift.end_time) not in text
+
+
+async def test_modal_omits_callout_when_nothing_joined_yet(
+    client, capture_modal, make_student, make_opportunity, make_shift
+):
+    await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity()
+    await make_shift(opp.id, start_in_hours=24)
+
+    await _interact(client, _view_payload("U0STU", opp.id))
+
+    (view,) = capture_modal
+    assert "already signed up" not in _modal_text(view)
+
+
 async def test_modal_for_a_mentor_is_read_only(
     client, capture_modal, make_mentor, make_opportunity, make_shift
 ):
