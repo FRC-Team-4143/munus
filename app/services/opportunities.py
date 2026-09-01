@@ -171,6 +171,18 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     for why a shared-channel message can't personalize a `url` button, and why a modal
     rather than a reply.
 
+    An **archived** opportunity (either type) instead drops the button entirely and shows a
+    "🗄️ Archived — no longer accepting signups or hours" line in place of the
+    required/ongoing flags (never both — that'd read as contradictory): the flag already
+    says there's nothing to do here, so a live-looking button leading to a modal that
+    repeats the same sentence is just a dead end. `routers.slack._handle_opportunity_view`
+    still handles the archived case defensively — a stale Slack client can fire the old
+    `block_actions` payload for a button it rendered before this message was updated —
+    routing it to a notice-only `opportunity_signup_modal` rather than the real
+    signup/log-hours form. Archiving (`admin_opportunities_archive`) and the auto-archive
+    job both call `update_announcement` afterward so an already-posted message picks
+    this up — otherwise it would keep advertising a closed opportunity indefinitely.
+
     It was briefly a plain `url` button straight to the opportunity page, on the
     reasoning that it was one tap for anyone holding a live session and only cost the
     sign-in wall otherwise. That traded on the session surviving — and it never does:
@@ -178,9 +190,10 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     wall, in its worst form (the link carried no `member`, so it landed on Legion's
     type-your-username form rather than even a one-tap push).
 
-    Routing note: `opportunity_view` *and* the modal's `opportunity_signup` callback
-    must stay registered in Legion's `routers/slack_dispatch.py` — unrouted ids are
-    swallowed with a 200, which makes the button look broken rather than error."""
+    Routing note: `opportunity_view` *and* the modals' `opportunity_signup` /
+    `opportunity_log_hours` callbacks must stay registered in Legion's
+    `routers/slack_dispatch.py` — unrouted ids are swallowed with a 200, which makes the
+    button look broken rather than error."""
     info = []
     if opp.location:
         info.append(f"📍 {opp.location}")
@@ -202,13 +215,24 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     # Slack renders them as separate paragraphs instead of one dense block; single "\n" within a
     # group keeps its lines (e.g. the info bullets) tight against each other.
     groups = []
-    if opp.is_required:
-        # is_required is only ever True for a shift-based opportunity — routers/admin.py
-        # normalizes it to False for a continuous one on both create and edit, so this
-        # copy never needs continuous-specific wording.
-        groups.append("🚨 *Required — every active student must sign up for at least 1 shift.*")
-    if opp.is_continuous:
-        groups.append("🔄 *Ongoing — no shifts here, log hours anytime you help out.*")
+    if opp.is_active is False:
+        # `is False` rather than a falsy check: a bare, never-flushed Opportunity() (as
+        # unit tests construct) hasn't picked up the column's True default yet, so
+        # `not opp.is_active` would misread that as archived. A real, persisted row is
+        # always concretely True or False by the time this runs.
+        #
+        # Archived also supersedes required/ongoing — showing "every student must sign
+        # up" right next to "no longer accepting signups" would read as contradictory,
+        # so skip them rather than layer the flags.
+        groups.append("🗄️ *Archived — no longer accepting signups or hours.*")
+    else:
+        if opp.is_required:
+            # is_required is only ever True for a shift-based opportunity — routers/admin.py
+            # normalizes it to False for a continuous one on both create and edit, so this
+            # copy never needs continuous-specific wording.
+            groups.append("🚨 *Required — every active student must sign up for at least 1 shift.*")
+        if opp.is_continuous:
+            groups.append("🔄 *Ongoing — no shifts here, log hours anytime you help out.*")
     if opp.description:
         groups.append(opp.description)
     if info:
@@ -219,20 +243,27 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     blocks = [{"type": "header", "text": {"type": "plain_text", "text": title, "emoji": True}}]
     if body:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": body}})
-    button_text = "📝 View & record hours" if opp.is_continuous else "🙋 View & sign up"
-    blocks.append(
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": button_text, "emoji": True},
-                    "action_id": "opportunity_view",
-                    "value": str(opp.id),
-                }
-            ],
-        }
-    )
+    if opp.is_active is not False:
+        # No button at all once archived — the "🗄️ Archived" flag above already says
+        # there's nothing to do here, so a button leading to a modal that repeats the
+        # same sentence is just a dead end wearing a live-looking control. The
+        # is_active guards in _handle_opportunity_view and both submit handlers stay in
+        # place regardless: a stale Slack client can still fire the old block_actions
+        # payload for a button it rendered before this message was updated.
+        button_text = "📝 View & record hours" if opp.is_continuous else "🙋 View & sign up"
+        blocks.append(
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": button_text, "emoji": True},
+                        "action_id": "opportunity_view",
+                        "value": str(opp.id),
+                    }
+                ],
+            }
+        )
     return text, blocks
 
 
@@ -274,11 +305,13 @@ def opportunity_signup_modal(
     nothing, so the button just works.
 
     `notice` renders instead of the shift picker and suppresses the submit button, for
-    the cases where there's nothing to sign up for: one with no upcoming shifts, or a
-    mentor (a read-only viewer here, same as on the web). A continuous opportunity never
-    reaches this modal — `_handle_opportunity_view` routes it to
-    `opportunity_log_hours_modal` instead, since logging hours directly *is* the action
-    there.
+    the cases where there's nothing to sign up for: one with no upcoming shifts, a
+    mentor (a read-only viewer here, same as on the web), or an **archived** opportunity
+    of either type — `_handle_opportunity_view` routes archived here regardless of
+    `is_continuous`, since there's equally nothing to do for either shape once closed. A
+    live continuous opportunity never reaches this modal otherwise —
+    `_handle_opportunity_view` routes it to `opportunity_log_hours_modal` instead, since
+    logging hours directly *is* the action there.
 
     `details_url` links out to the full opportunity page, for what the modal can't hold:
     who else is signed up, and cancelling a signup. It's a per-person magic link, which

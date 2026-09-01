@@ -289,6 +289,12 @@ async def _handle_opportunity_view(
     A linked student on a **continuous** opportunity skips the shift picker entirely —
     there's nothing to sign up for — and instead gets `opportunity_log_hours_modal`,
     handled by `_handle_opportunity_log_hours_submit`.
+
+    An **archived** opportunity (either type) short-circuits before any of that. The
+    announcement drops its button entirely once archived, so this only fires from a
+    stale Slack client that rendered the button before the message was updated — still
+    worth a real notice-only modal rather than a bare 200, since "nothing happened" on
+    a tap someone actually made is indistinguishable from a broken button.
     """
     try:
         opp_id = int(value)
@@ -305,6 +311,18 @@ async def _handle_opportunity_view(
         )
     ).scalars().first()
     if opp is None:
+        return Response(status_code=200)
+
+    if not opp.is_active:
+        # Archived closes the door for everyone the same way, regardless of type or who's
+        # asking — no signup/log-hours form, just why.
+        await open_modal(
+            trigger_id,
+            opp_service.opportunity_signup_modal(
+                opp, None,
+                notice="🗄️ *This opportunity has been archived* — no longer accepting signups or hours.",
+            ),
+        )
         return Response(status_code=200)
 
     student = (
@@ -391,9 +409,17 @@ async def _handle_opportunity_signup_submit(db: AsyncSession, view: dict, acting
     if student is None:
         return _modal_error("shift", "Your Slack account isn't linked to a student record.")
 
+    # Opportunity.is_active guards a modal opened before an archive raced with this
+    # submit — the button now bounces to a notice-only modal, but a picker already open
+    # in someone's hand isn't retracted.
     shift = (
         await db.execute(
-            select(Shift).where(Shift.id == shift_id, Shift.opportunity_id == opp_id)
+            select(Shift)
+            .join(Opportunity)
+            .where(
+                Shift.id == shift_id, Shift.opportunity_id == opp_id,
+                Opportunity.is_active.is_(True),
+            )
         )
     ).scalars().first()
     if shift is None:
@@ -415,7 +441,12 @@ async def _handle_opportunity_log_hours_submit(
     `submit_opportunity_hours` the web `/opportunities/{id}/log-hours` form calls so
     reviewer routing can't drift between the two. No idempotency guard here either,
     matching `submit_opportunity_hours` — logging repeatedly against an ongoing
-    opportunity over the season is expected, not a duplicate to reject."""
+    opportunity over the season is expected, not a duplicate to reject.
+
+    `opp.is_active` is checked here too, not just in `_handle_opportunity_view` — the
+    button bounces an archived opportunity to a notice-only modal now, but a log-hours
+    form already open in someone's hand when the archive happened still needs to be
+    rejected rather than silently accepted."""
     try:
         opp_id = int(view.get("private_metadata", ""))
     except ValueError:
@@ -444,8 +475,13 @@ async def _handle_opportunity_log_hours_submit(
     opp = (
         await db.execute(select(Opportunity).where(Opportunity.id == opp_id))
     ).scalars().first()
-    if opp is None or not opp.is_continuous or not opp.is_active:
+    if opp is None or not opp.is_continuous:
         return Response(status_code=200)
+    if not opp.is_active:
+        # The button now bounces to a notice-only modal, but a form already open in
+        # someone's hand when the archive happened needs to say so rather than just
+        # closing as if the hours were logged.
+        return _modal_error("hours", "This opportunity has been archived.")
 
     submission = await submissions.submit_opportunity_hours(
         db, student.id, opp, round(hours, 2), report_raw.strip() if report_raw else None

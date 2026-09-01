@@ -45,6 +45,28 @@ async def test_identify_and_browse(client, make_student, make_mentor, make_oppor
     assert "Season total" in my_hours.text
 
 
+async def test_shift_signup_rejects_archived_opportunity(
+    client, db, make_student, make_opportunity, make_shift
+):
+    """A bookmarked or shared shift link shouldn't outlive its opportunity's archiving —
+    matches the same guard on the Slack signup modal."""
+    from sqlalchemy import select
+    from app.models import Signup
+
+    student = await make_student(code="ada00001")
+    opp = await make_opportunity(is_active=False)
+    shift = await make_shift(opp.id)
+
+    await _identify(client, "ada00001")
+    resp = await client.post(f"/shifts/{shift.id}/signup", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/opportunities"
+
+    assert (
+        await db.execute(select(Signup).where(Signup.student_id == student.id))
+    ).scalars().first() is None
+
+
 async def test_mentor_can_view_opportunity_without_signup_controls(
     client, make_mentor, make_opportunity, make_shift
 ):

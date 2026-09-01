@@ -460,8 +460,14 @@ async def shift_signup(
     if not student:
         return _signin_redirect("/opportunities")
 
+    # Opportunity.is_active guards a bookmarked or shared shift link outliving its
+    # opportunity's archiving — matches the same check on the Slack signup modal.
     shift = (
-        await db.execute(select(Shift).where(Shift.id == shift_id))
+        await db.execute(
+            select(Shift).join(Opportunity).where(
+                Shift.id == shift_id, Opportunity.is_active.is_(True)
+            )
+        )
     ).scalars().first()
     if not shift:
         return RedirectResponse("/opportunities", status_code=303)

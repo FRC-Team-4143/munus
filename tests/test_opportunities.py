@@ -35,6 +35,16 @@ def test_announcement_button_reads_record_hours_for_continuous_opportunity():
     assert button["text"]["text"] == "📝 View & record hours"
 
 
+def test_announcement_omits_button_for_archived_opportunity():
+    """An archived opportunity's flag already says there's nothing to do — a button
+    leading to a modal repeating that would be a dead end wearing a live control, so
+    the actions block is dropped entirely rather than relabeled."""
+    opp = Opportunity(id=1, name="Bag Night", is_active=False)
+    text, blocks = opportunity_announcement_blocks(opp)
+    assert "Archived" in text
+    assert not any(b["type"] == "actions" for b in blocks)
+
+
 def test_announcement_flags_required_opportunity():
     opp = Opportunity(id=1, name="Bag Night", is_required=True)
     text, blocks = opportunity_announcement_blocks(opp)
