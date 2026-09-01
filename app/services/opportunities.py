@@ -203,7 +203,11 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     # group keeps its lines (e.g. the info bullets) tight against each other.
     groups = []
     if opp.is_required:
-        groups.append("🚨 *Required — every active student must sign up for at least 1 shift.*")
+        required_copy = (
+            "🚨 *Required — every active student must log hours here.*" if opp.is_continuous
+            else "🚨 *Required — every active student must sign up for at least 1 shift.*"
+        )
+        groups.append(required_copy)
     if opp.description:
         groups.append(opp.description)
     if info:
