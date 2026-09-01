@@ -313,6 +313,17 @@ shift/continuous trigger has fired yet). `opportunity_announcement_blocks` needs
 `opp.shifts` eager-loaded (`selectinload`) before it's called — it's synchronous and
 can't lazy-load across an async session.
 
+**`update_announcement` never posts a first announcement, only syncs an existing one** —
+an opportunity that missed its trigger (most commonly: `SLACK_ANNOUNCE_CHANNEL` was
+still blank at the moment it was created, or a shift-based one's first shift) stays
+unannounced forever no matter how many times it's edited afterward. **Admin → an
+opportunity's edit page → "Post announcement now"** (`admin_opportunities_announce` in
+`routers/admin.py`) is the way out: shown only while `announcement_channel_id` is blank,
+it calls `announce_opportunity` directly. No-ops (redirects without posting) if the
+opportunity already has an announcement, or if `SLACK_ANNOUNCE_CHANNEL` is still blank —
+the latter surfaces as an inline error rather than a silent no-op, since an admin
+clicking the button has already decided it should post.
+
 ### CSV exports
 `/admin/report/export`, opened via the report page's **Export CSV** button (a modal for
 picking a date range — blank means all-time — and an "include archived students"

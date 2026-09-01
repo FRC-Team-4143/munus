@@ -811,6 +811,82 @@ async def test_admin_edit_does_not_call_slack_when_never_announced(client, db, m
     assert resp.status_code == 303
 
 
+async def test_admin_announce_now_posts_and_persists(client, db, make_opportunity, monkeypatch):
+    """The manual "Post announcement now" action is how an opportunity that missed its
+    normal trigger (e.g. SLACK_ANNOUNCE_CHANNEL was blank at creation) can still get
+    announced — update_announcement only ever syncs an *existing* announcement."""
+    import app.services.opportunities as opp_module
+    from app.config import settings
+
+    async def fake_post_to_channel(channel_id, text, blocks=None, automated=True):
+        return "1700000000.000200"
+
+    monkeypatch.setattr(opp_module, "post_to_channel", fake_post_to_channel)
+    original = settings.slack_announce_channel
+    settings.slack_announce_channel = "C0ANNOUNCE"
+    try:
+        await _login(client)
+        opp = await make_opportunity(name="CAD Subteam", is_continuous=True)
+
+        resp = await client.post(
+            f"/admin/opportunities/{opp.id}/announce", follow_redirects=False
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"].endswith("?announced=1")
+
+        await db.refresh(opp)
+        assert opp.announcement_channel_id == "C0ANNOUNCE"
+        assert opp.announcement_ts == "1700000000.000200"
+    finally:
+        settings.slack_announce_channel = original
+
+
+async def test_admin_announce_now_errors_without_channel_configured(client, db, make_opportunity):
+    from app.config import settings
+
+    original = settings.slack_announce_channel
+    settings.slack_announce_channel = ""
+    try:
+        await _login(client)
+        opp = await make_opportunity(name="CAD Subteam", is_continuous=True)
+
+        resp = await client.post(
+            f"/admin/opportunities/{opp.id}/announce", follow_redirects=False
+        )
+        assert resp.status_code == 303
+        assert "error=" in resp.headers["location"]
+
+        await db.refresh(opp)
+        assert opp.announcement_channel_id is None
+    finally:
+        settings.slack_announce_channel = original
+
+
+async def test_admin_announce_now_noops_if_already_announced(client, db, make_opportunity, monkeypatch):
+    import app.services.opportunities as opp_module
+    from app.config import settings
+
+    async def fail_if_called(*a, **k):
+        raise AssertionError("post_to_channel should not be called")
+
+    monkeypatch.setattr(opp_module, "post_to_channel", fail_if_called)
+    original = settings.slack_announce_channel
+    settings.slack_announce_channel = "C0ANNOUNCE"
+    try:
+        await _login(client)
+        opp = await make_opportunity(
+            name="Bag Night", announcement_channel_id="C0OLD", announcement_ts="1699999999.000100",
+        )
+
+        resp = await client.post(
+            f"/admin/opportunities/{opp.id}/announce", follow_redirects=False
+        )
+        assert resp.status_code == 303
+        assert "announced" not in resp.headers["location"]
+    finally:
+        settings.slack_announce_channel = original
+
+
 async def test_first_shift_announcement_includes_date(client, db, make_opportunity, monkeypatch):
     import app.services.opportunities as opp_module
     from app.config import settings

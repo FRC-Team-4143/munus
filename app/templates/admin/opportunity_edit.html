@@ -23,6 +23,22 @@
 </div>
 {% endif %}
 
+{% if request.query_params.get('announced') %}
+<div class="alert alert-success alert-dismissible fade show py-2" role="alert">
+  <i class="bi bi-megaphone me-1"></i> Posted the announcement to Slack.
+  <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+{% if not opp.announcement_channel_id %}
+<div class="alert alert-secondary d-flex justify-content-between align-items-center py-2 mb-3">
+  <span><i class="bi bi-slack me-1"></i> Not yet announced in Slack — it missed its usual trigger.</span>
+  <form method="post" action="/admin/opportunities/{{ opp.id }}/announce" class="mb-0">
+    <button type="submit" class="btn btn-sm btn-outline-primary">Post announcement now</button>
+  </form>
+</div>
+{% endif %}
+
 <div class="row g-4">
   <!-- Metadata -->
   <div class="col-lg-5">

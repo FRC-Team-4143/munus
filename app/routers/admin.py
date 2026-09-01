@@ -479,6 +479,41 @@ async def admin_opportunities_edit_post(
     return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
 
 
+@router.post("/opportunities/{opp_id}/announce")
+async def admin_opportunities_announce(opp_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """Manually post the initial Slack announcement for an opportunity that missed its
+    normal trigger — continuous-on-creation, or first-shift for a shift-based one —
+    e.g. because SLACK_ANNOUNCE_CHANNEL wasn't set yet at that moment. `update_announcement`
+    only keeps an *already-posted* announcement in sync; it never posts the first one,
+    so an opportunity that missed its trigger would otherwise be stuck unannounced
+    forever. No-ops if this opportunity already has one (never double-posts)."""
+    if redirect := _require_auth(request):
+        return redirect
+    opp = (
+        await db.execute(
+            select(Opportunity).options(selectinload(Opportunity.shifts)).where(Opportunity.id == opp_id)
+        )
+    ).scalars().first()
+    if not opp:
+        return RedirectResponse("/admin/opportunities", status_code=303)
+    if opp.announcement_channel_id:
+        return RedirectResponse(f"/admin/opportunities/{opp_id}/edit", status_code=303)
+    if not settings.slack_announce_channel:
+        return RedirectResponse(
+            f"/admin/opportunities/{opp_id}/edit?error=Set+a+Slack+announce+channel+in+Admin+%E2%86%92+Settings+first.",
+            status_code=303,
+        )
+    ts = await announce_opportunity(db, opp)
+    if not ts:
+        return RedirectResponse(
+            f"/admin/opportunities/{opp_id}/edit?error=Couldn%27t+post+to+Slack+%E2%80%94+check+the+server+log.",
+            status_code=303,
+        )
+    await audit.record(db, request, "opportunity.announce", f"Posted Slack announcement for {opp.name}", entity_type="opportunity", entity_id=opp.id)
+    await db.commit()
+    return RedirectResponse(f"/admin/opportunities/{opp_id}/edit?announced=1", status_code=303)
+
+
 @router.post("/opportunities/{opp_id}/archive")
 async def admin_opportunities_archive(opp_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     if redirect := _require_auth(request):
