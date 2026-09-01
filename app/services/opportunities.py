@@ -165,8 +165,10 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     are added, rescheduled, or removed, and the already-posted message needs to track it.
 
     The button is an **interactive** button (`action_id: opportunity_view`), not a link
-    button, and clicking it opens a modal (`opportunity_signup_modal`) — see there for
-    why a shared-channel message can't personalize a `url` button, and why a modal
+    button, and clicking it opens a modal — `opportunity_signup_modal` for a shift-based
+    opportunity, or `opportunity_log_hours_modal` for a continuous one (its button reads
+    "📝 View & record hours" instead, since there's nothing to sign up for) — see there
+    for why a shared-channel message can't personalize a `url` button, and why a modal
     rather than a reply.
 
     It was briefly a plain `url` button straight to the opportunity page, on the
@@ -212,13 +214,14 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     blocks = [{"type": "header", "text": {"type": "plain_text", "text": title, "emoji": True}}]
     if body:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": body}})
+    button_text = "📝 View & record hours" if opp.is_continuous else "🙋 View & sign up"
     blocks.append(
         {
             "type": "actions",
             "elements": [
                 {
                     "type": "button",
-                    "text": {"type": "plain_text", "text": "🙋 View & sign up", "emoji": True},
+                    "text": {"type": "plain_text", "text": button_text, "emoji": True},
                     "action_id": "opportunity_view",
                     "value": str(opp.id),
                 }
@@ -229,6 +232,7 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
 
 
 SIGNUP_CALLBACK = "opportunity_signup"
+LOG_HOURS_CALLBACK = "opportunity_log_hours"
 _SELECT_OPTION_MAX = 75  # Slack's hard cap on a select option's text
 
 
@@ -265,16 +269,18 @@ def opportunity_signup_modal(
     nothing, so the button just works.
 
     `notice` renders instead of the shift picker and suppresses the submit button, for
-    the cases where there's nothing to sign up for: a continuous opportunity, one with
-    no upcoming shifts, or a mentor (a read-only viewer here, same as on the web).
+    the cases where there's nothing to sign up for: one with no upcoming shifts, or a
+    mentor (a read-only viewer here, same as on the web). A continuous opportunity never
+    reaches this modal — `_handle_opportunity_view` routes it to
+    `opportunity_log_hours_modal` instead, since logging hours directly *is* the action
+    there.
 
     `details_url` links out to the full opportunity page, for what the modal can't hold:
-    who else is signed up, cancelling a signup, and logging hours on a continuous
-    opportunity. It's a per-person magic link, which is safe *here* for the same reason
-    it isn't in the announcement — a modal is opened by and shown to exactly one person.
-    Rendered as a section link rather than a `url` button on purpose: Slack sends an
-    interaction payload for url buttons that has to be acked, and a plain link needs our
-    server not at all.
+    who else is signed up, and cancelling a signup. It's a per-person magic link, which
+    is safe *here* for the same reason it isn't in the announcement — a modal is opened
+    by and shown to exactly one person. Rendered as a section link rather than a `url`
+    button on purpose: Slack sends an interaction payload for url buttons that has to be
+    acked, and a plain link needs our server not at all.
     """
     blocks: list[dict] = []
     details = []
@@ -328,6 +334,63 @@ def opportunity_signup_modal(
     if not notice:
         view["submit"] = {"type": "plain_text", "text": "Sign up"}
     return view
+
+
+def opportunity_log_hours_modal(opp: Opportunity, *, details_url: Optional[str] = None) -> dict:
+    """The modal behind a continuous opportunity's "📝 View & record hours" button.
+
+    A continuous opportunity has no shifts to pick, so unlike `opportunity_signup_modal`
+    this skips straight to an hours + notes form — logging hours directly *is* the
+    action here. Shape mirrors `submissions.log_hours_modal`. Submission is handled by
+    `routers.slack._handle_opportunity_log_hours_submit`, which calls the same
+    `submissions.submit_opportunity_hours` the web `/opportunities/{id}/log-hours` form
+    does, so reviewer routing can't drift between the two.
+    """
+    details = []
+    if opp.is_required:
+        details.append("🚨 *Required — every active student must log hours here.*")
+    if opp.description:
+        details.append(opp.description)
+    info = []
+    if opp.location:
+        info.append(f"📍 {opp.location}")
+    if opp.attire:
+        info.append(f"👕 {opp.attire}")
+    if info:
+        details.append("\n".join(info))
+
+    blocks: list[dict] = []
+    if details:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n\n".join(details)}})
+    blocks.append({
+        "type": "input",
+        "block_id": "hours",
+        "label": {"type": "plain_text", "text": "Hours volunteered"},
+        "element": {"type": "plain_text_input", "action_id": "value"},
+    })
+    blocks.append({
+        "type": "input",
+        "block_id": "report",
+        "optional": True,
+        "label": {"type": "plain_text", "text": "What did you do? (optional)"},
+        "element": {"type": "plain_text_input", "action_id": "value", "multiline": True},
+    })
+    if details_url:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"<{details_url}|🔗 Full details>"},
+        })
+
+    title = opp.name if len(opp.name) <= 24 else opp.name[:23] + "…"  # Slack caps titles at 24
+    return {
+        "type": "modal",
+        "callback_id": LOG_HOURS_CALLBACK,
+        "private_metadata": str(opp.id),
+        "title": {"type": "plain_text", "text": title},
+        "submit": {"type": "plain_text", "text": "Log hours"},
+        "close": {"type": "plain_text", "text": "Cancel"},
+        "blocks": blocks,
+    }
 
 
 async def shift_options_for_modal(

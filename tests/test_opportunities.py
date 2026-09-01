@@ -25,6 +25,16 @@ def test_announcement_button_is_an_interactive_action_not_a_link():
     assert "url" not in button  # a url button would bypass our server entirely
 
 
+def test_announcement_button_reads_record_hours_for_continuous_opportunity():
+    """A continuous opportunity has no shifts to sign up for — the button should say so,
+    and `_handle_opportunity_view` opens the hours-logging modal instead of a shift
+    picker for it (see test_slack_interact.py)."""
+    opp = Opportunity(id=1, name="CAD Subteam", is_continuous=True)
+    _, blocks = opportunity_announcement_blocks(opp)
+    button = blocks[-1]["elements"][0]
+    assert button["text"]["text"] == "📝 View & record hours"
+
+
 def test_announcement_flags_required_opportunity():
     opp = Opportunity(id=1, name="Bag Night", is_required=True)
     text, blocks = opportunity_announcement_blocks(opp)
