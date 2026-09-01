@@ -70,6 +70,27 @@ def _block_slack_network():
         whmod.AsyncWebhookClient = orig_wh
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _block_google_calendar_network():
+    """Hard backstop: no test may reach Google Calendar, whatever is in the ambient .env.
+
+    Same rationale as `_block_slack_network` above: a dev checkout's real .env can carry
+    a live GOOGLE_CALENDAR_ID + GOOGLE_SERVICE_ACCOUNT_FILE, and shift-related tests
+    (create/update/delete) call `services.opportunities.sync_shift_calendar_event` /
+    `remove_shift_calendar_event` unconditionally. Those only no-op via
+    `google_calendar._configured()`, so against real creds they'd push real events onto
+    the live calendar. Force `_configured()` False for the whole session; every public
+    function in google_calendar.py checks it before touching the network."""
+    import app.services.google_calendar as gcal
+
+    orig = gcal._configured
+    gcal._configured = lambda: False
+    try:
+        yield
+    finally:
+        gcal._configured = orig
+
+
 @pytest_asyncio.fixture
 async def engine():
     """A fresh in-memory database engine with all tables created."""
