@@ -12,8 +12,8 @@ from tests.conftest import make_sso_cookie
 
 _MUTABLE = [
     "slack_announce_channel", "timezone", "reminder_lead_hours",
-    "auto_reject_days", "auto_archive_days", "backup_day", "backup_time",
-    "backup_keep", "updates_enabled",
+    "auto_reject_days", "pending_reminder_days", "auto_archive_days",
+    "backup_day", "backup_time", "backup_keep", "updates_enabled",
 ]
 
 
@@ -29,6 +29,7 @@ def _form(**overrides):
         "timezone": settings.timezone,
         "reminder_lead_hours": settings.reminder_lead_hours,
         "auto_reject_days": settings.auto_reject_days,
+        "pending_reminder_days": settings.pending_reminder_days,
         "auto_archive_days": settings.auto_archive_days,
         "backup_day": settings.backup_day,
         "backup_time": settings.backup_time,
@@ -59,6 +60,7 @@ async def test_settings_post_writes_env_and_updates_singleton(
     settings.backup_time = "23:30"
     settings.reminder_lead_hours = 24
     settings.auto_reject_days = 7
+    settings.pending_reminder_days = 3
     settings.auto_archive_days = 1
     settings.slack_announce_channel = ""
 
@@ -68,6 +70,7 @@ async def test_settings_post_writes_env_and_updates_singleton(
         backup_time="02:15",
         reminder_lead_hours="12",
         auto_reject_days="3",
+        pending_reminder_days="5",
         auto_archive_days="2",
         slack_announce_channel="C0ANNOUNCE",
         updates_enabled="true",
@@ -82,6 +85,7 @@ async def test_settings_post_writes_env_and_updates_singleton(
     assert settings.backup_time == "02:15"
     assert settings.reminder_lead_hours == 12
     assert settings.auto_reject_days == 3
+    assert settings.pending_reminder_days == 5
     assert settings.auto_archive_days == 2
     assert settings.slack_announce_channel == "C0ANNOUNCE"
 
@@ -92,6 +96,7 @@ async def test_settings_post_writes_env_and_updates_singleton(
     assert "BACKUP_TIME=02:15" in written
     assert "REMINDER_LEAD_HOURS=12" in written
     assert "AUTO_REJECT_DAYS=3" in written
+    assert "PENDING_REMINDER_DAYS=5" in written
     assert "AUTO_ARCHIVE_DAYS=2" in written
     assert "SLACK_ANNOUNCE_CHANNEL=C0ANNOUNCE" in written
 

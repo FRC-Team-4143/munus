@@ -222,6 +222,14 @@ do the same from `/admin/submissions`.
 
 **Fallback:** the web `/submit` form (student picks a mentor) still exists for ad-hoc hours.
 
+**Stale pending:** a submitted-but-undecided entry is never removed — it sits `pending`
+indefinitely (only `approved` hours count; `pending` feeds the projected estimate). The
+`job_pending_review_reminders` scheduler job re-DMs the reviewer the same `reviewer_blocks`
+card every `PENDING_REMINDER_DAYS` until they act; `HourSubmission.reminder_sent_at`
+debounces it, and any approve/reject (which flips `status` off `pending`) stops it. The
+7-day `AUTO_REJECT_DAYS` job does **not** touch a shift that already has a submission of
+any status.
+
 Slack modals/buttons require the app's **Interactivity Request URL** = `/slack/interact`
 (public host); `views.open` needs a fresh `trigger_id`, so `hours_adjust` opens the modal
 inline (not in a background task).
@@ -336,6 +344,7 @@ add Bootstrap default light classes.
 | Pre-shift reminders | every 30 min (DMs shifts within `REMINDER_LEAD_HOURS`) |
 | Post-shift submit prompts | every 30 min (DMs after a shift ends, once) |
 | Auto-reject unlogged shifts | every 6 h (records a rejected submission `AUTO_REJECT_DAYS` after a shift ends if the student never logged it; `0` = off) |
+| Pending-review reminders | every 6 h (re-DMs the reviewing mentor while a submission stays `pending`, once it's `PENDING_REMINDER_DAYS` old and then on that cadence; debounced by `HourSubmission.reminder_sent_at`; `0` = off; nothing is ever removed) |
 | Auto-archive stale opportunities | every 6 h, plus once at startup (archives a shift-based opportunity `AUTO_ARCHIVE_DAYS` after its last shift ends; `0` = off; never touches continuous opportunities or logged hours — only `is_active`/`archived_at`) |
 | Database backup | `BACKUP_DAY` at `BACKUP_TIME` (SQLite snapshot, rotates to `BACKUP_KEEP`) |
 | Legion roster sync | hourly, on the hour (cheap incremental pull via `updated_since`) |

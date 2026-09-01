@@ -219,6 +219,9 @@ class HourSubmission(Base):
     submitted_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     review_note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Last time the scheduler nudged the reviewer that this submission is still pending
+    # (services/scheduler.job_pending_review_reminders). NULL = never nudged.
+    reminder_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     student: Mapped["Student"] = relationship("Student", back_populates="submissions")
     opportunity: Mapped[Optional["Opportunity"]] = relationship("Opportunity")

@@ -43,6 +43,7 @@ async def init_db() -> None:
         await conn.run_sync(_add_opportunity_is_required_column)
         await conn.run_sync(_add_opportunity_announcement_columns)
         await conn.run_sync(_add_shift_google_event_id_column)
+        await conn.run_sync(_add_hour_submission_reminder_sent_at_column)
 
     await _seed_level_requirements()
 
@@ -121,6 +122,17 @@ def _add_shift_google_event_id_column(conn) -> None:
     columns = [c["name"] for c in inspector.get_columns("shifts")]
     if "google_event_id" not in columns:
         conn.execute(text("ALTER TABLE shifts ADD COLUMN google_event_id VARCHAR(255)"))
+
+
+def _add_hour_submission_reminder_sent_at_column(conn) -> None:
+    """Add `reminder_sent_at` to hour_submissions if not already present — when the
+    scheduler last nudged the reviewer that the submission is still pending
+    (services/scheduler.job_pending_review_reminders). No-op on a fresh schema."""
+    from sqlalchemy import inspect, text
+    inspector = inspect(conn)
+    columns = [c["name"] for c in inspector.get_columns("hour_submissions")]
+    if "reminder_sent_at" not in columns:
+        conn.execute(text("ALTER TABLE hour_submissions ADD COLUMN reminder_sent_at DATETIME"))
 
 
 def _migration_drop_students_if_legacy_schema(conn) -> None:

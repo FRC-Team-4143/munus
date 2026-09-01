@@ -2,5 +2,11 @@ __pycache__/
 *.py[cod]
 venv/
 .env
+.env.bak*
+.env.*.bak
+*.bak
 *.db
 .pytest_cache/
+
+# Google service-account key for Calendar sync — never commit
+secrets/

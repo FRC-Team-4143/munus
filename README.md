@@ -94,11 +94,12 @@ Pushing to `main` automatically deploys via GitHub Actions (tests must pass firs
 | `BASE_URL` | `http://localhost:8001` | Public URL used in Slack links |
 | `REMINDER_LEAD_HOURS` | `24` | Hours before a shift to DM signed-up students |
 | `AUTO_REJECT_DAYS` | `7` | Close out a never-logged shift this many days after it ends (0 = off) |
+| `PENDING_REMINDER_DAYS` | `3` | Re-DM the reviewing mentor about a still-pending submission every this many days (0 = off) |
 | `BACKUP_DIR` / `BACKUP_KEEP` | `backups` / `14` | Snapshot directory and how many to retain |
 | `BACKUP_DAY` / `BACKUP_TIME` | `sun` / `23:30` | When the automatic SQLite snapshot runs |
 | `UPDATES_ENABLED` | `true` | Master switch for automated Slack messages and scheduled jobs |
 
-> Most non-secret settings — announce channel, timezone, reminder/auto-reject timing, backup schedule, and the updates toggle — can be edited at runtime from **Admin → Settings**, which writes changes back to `.env` and applies them immediately. API keys/secrets (`SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SSO_SECRET`, `LEGION_API_KEY`) and deploy-time values (`DATABASE_URL`, `BASE_URL`) are intentionally **not** editable from the UI.
+> Most non-secret settings — announce channel, timezone, reminder/auto-reject/pending-review timing, backup schedule, and the updates toggle — can be edited at runtime from **Admin → Settings**, which writes changes back to `.env` and applies them immediately. API keys/secrets (`SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SSO_SECRET`, `LEGION_API_KEY`) and deploy-time values (`DATABASE_URL`, `BASE_URL`) are intentionally **not** editable from the UI.
 
 ---
 
@@ -150,7 +151,7 @@ username) is recorded as the audit actor.
 | **Requirements** | Edit required season hours per level |
 | **Audit Log** | Append-only record of every mutation |
 | **Backup** | Download a live SQLite snapshot or stage a restore; automatic rotating snapshots |
-| **Settings** | Live-edit non-secret config — season start, timezone, announce channel, reminder & auto-reject timing, backup schedule, the updates toggle, and per-level season requirements. Changes write back to `.env` and apply immediately |
+| **Settings** | Live-edit non-secret config — season start, timezone, announce channel, reminder / auto-reject / pending-review timing, backup schedule, the updates toggle, and per-level season requirements. Changes write back to `.env` and apply immediately |
 
 ### Legion integration
 

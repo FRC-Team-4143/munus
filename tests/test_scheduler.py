@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from sqlalchemy import select
 
 import app.services.scheduler as scheduler
@@ -180,6 +182,211 @@ async def test_auto_reject_skips_submitted_and_respects_disable(
         await db.execute(select(HourSubmission).where(HourSubmission.student_id == other.id))
     ).scalars().all()
     assert other_subs == []
+
+
+async def _pending_submission(
+    db, student, mentor, opp, *, days_old, reminder_days_ago=None,
+    status=SubmissionStatus.pending,
+):
+    """A submission dated `days_old` days ago, optionally already nudged
+    `reminder_days_ago` days ago. `mentor=None` leaves it unrouted."""
+    now = datetime.utcnow()
+    sub = HourSubmission(
+        student_id=student.id,
+        opportunity_id=opp.id,
+        shift_id=None,
+        hours=2.0,
+        report="Set up tables",
+        reviewer_mentor_id=mentor.id if mentor else None,
+        status=status,
+        submitted_at=now - timedelta(days=days_old),
+        reminder_sent_at=(
+            now - timedelta(days=reminder_days_ago) if reminder_days_ago is not None else None
+        ),
+    )
+    db.add(sub)
+    await db.commit()
+    await db.refresh(sub)
+    return sub
+
+
+async def test_pending_reminder_dms_reviewer(
+    db, session_factory, make_student, make_mentor, make_opportunity, monkeypatch
+):
+    student = await make_student(slack="U0STU")
+    mentor = await make_mentor(slack="U0REV")
+    opp = await make_opportunity()
+    sub = await _pending_submission(db, student, mentor, opp, days_old=4)
+
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None, automated=False):
+        calls.append((uid, text, blocks))
+        return "ts"
+
+    monkeypatch.setattr(scheduler, "send_dm", fake_send_dm)
+    monkeypatch.setattr(scheduler, "AsyncSessionLocal", session_factory)
+
+    await scheduler.job_pending_review_reminders()
+
+    assert len(calls) == 1
+    uid, _text, blocks = calls[0]
+    assert uid == "U0REV"
+    # The nudge carries the standard, actionable review card.
+    actions = next(b for b in blocks if b["type"] == "actions")
+    assert {e["action_id"] for e in actions["elements"]} == {
+        "submission_approve", "review_edit", "submission_reject"
+    }
+
+    await db.refresh(sub)
+    assert sub.reminder_sent_at is not None
+
+    # Debounced: an immediate second run finds a fresh reminder_sent_at and does nothing.
+    await scheduler.job_pending_review_reminders()
+    assert len(calls) == 1
+
+
+async def test_pending_reminder_skips_recent_submission(
+    db, session_factory, make_student, make_mentor, make_opportunity, monkeypatch
+):
+    student = await make_student(slack="U0STU")
+    mentor = await make_mentor(slack="U0REV")
+    opp = await make_opportunity()
+    await _pending_submission(db, student, mentor, opp, days_old=1)  # inside the 3-day window
+
+    calls = []
+
+    async def fake_send_dm(*a, **k):
+        calls.append(a)
+        return "ts"
+
+    monkeypatch.setattr(scheduler, "send_dm", fake_send_dm)
+    monkeypatch.setattr(scheduler, "AsyncSessionLocal", session_factory)
+    await scheduler.job_pending_review_reminders()
+    assert calls == []
+
+
+async def test_pending_reminder_recurs_after_another_window(
+    db, session_factory, make_student, make_mentor, make_opportunity, monkeypatch
+):
+    student = await make_student(slack="U0STU")
+    mentor = await make_mentor(slack="U0REV")
+    opp = await make_opportunity()
+    # Nudged once already — 1 day ago is still inside the window, 4 days ago is past it.
+    fresh = await _pending_submission(db, student, mentor, opp, days_old=10, reminder_days_ago=1)
+    stale = await _pending_submission(db, student, mentor, opp, days_old=20, reminder_days_ago=4)
+
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None, automated=False):
+        calls.append((uid, text))
+        return "ts"
+
+    monkeypatch.setattr(scheduler, "send_dm", fake_send_dm)
+    monkeypatch.setattr(scheduler, "AsyncSessionLocal", session_factory)
+    await scheduler.job_pending_review_reminders()
+
+    assert len(calls) == 1
+    await db.refresh(fresh)
+    await db.refresh(stale)
+    assert fresh.reminder_sent_at < stale.reminder_sent_at  # only `stale` was re-stamped
+
+
+async def test_pending_reminder_ignores_decided_submissions(
+    db, session_factory, make_student, make_mentor, make_opportunity, monkeypatch
+):
+    student = await make_student(slack="U0STU")
+    mentor = await make_mentor(slack="U0REV")
+    opp = await make_opportunity()
+    await _pending_submission(db, student, mentor, opp, days_old=10, status=SubmissionStatus.approved)
+    await _pending_submission(db, student, mentor, opp, days_old=10, status=SubmissionStatus.rejected)
+
+    calls = []
+
+    async def fake_send_dm(*a, **k):
+        calls.append(a)
+        return "ts"
+
+    monkeypatch.setattr(scheduler, "send_dm", fake_send_dm)
+    monkeypatch.setattr(scheduler, "AsyncSessionLocal", session_factory)
+    await scheduler.job_pending_review_reminders()
+    assert calls == []
+
+
+async def test_pending_reminder_skips_when_no_reachable_reviewer(
+    db, session_factory, make_student, make_mentor, make_opportunity, monkeypatch
+):
+    student = await make_student(slack="U0STU")
+    opp = await make_opportunity()
+    archived = await make_mentor(name="Gone", slack="U0GONE", is_active=False)
+    no_slack = await make_mentor(name="No Slack", slack=None)
+    subs = [
+        await _pending_submission(db, student, archived, opp, days_old=5),
+        await _pending_submission(db, student, no_slack, opp, days_old=5),
+        await _pending_submission(db, student, None, opp, days_old=5),  # unrouted → Admin queue
+    ]
+
+    calls = []
+
+    async def fake_send_dm(*a, **k):
+        calls.append(a)
+        return "ts"
+
+    monkeypatch.setattr(scheduler, "send_dm", fake_send_dm)
+    monkeypatch.setattr(scheduler, "AsyncSessionLocal", session_factory)
+    await scheduler.job_pending_review_reminders()
+
+    assert calls == []
+    for s in subs:
+        await db.refresh(s)
+        assert s.reminder_sent_at is None  # not stamped → a later reviewer still gets nudged
+
+
+async def test_pending_reminder_skips_archived_student(
+    db, session_factory, make_student, make_mentor, make_opportunity, monkeypatch
+):
+    student = await make_student(slack="U0STU", is_active=False)
+    mentor = await make_mentor(slack="U0REV")
+    opp = await make_opportunity()
+    await _pending_submission(db, student, mentor, opp, days_old=5)
+
+    calls = []
+
+    async def fake_send_dm(*a, **k):
+        calls.append(a)
+        return "ts"
+
+    monkeypatch.setattr(scheduler, "send_dm", fake_send_dm)
+    monkeypatch.setattr(scheduler, "AsyncSessionLocal", session_factory)
+    await scheduler.job_pending_review_reminders()
+    assert calls == []
+
+
+async def test_pending_reminder_respects_disable(
+    db, session_factory, make_student, make_mentor, make_opportunity, monkeypatch
+):
+    student = await make_student(slack="U0STU")
+    mentor = await make_mentor(slack="U0REV")
+    opp = await make_opportunity()
+    await _pending_submission(db, student, mentor, opp, days_old=5)
+
+    calls = []
+
+    async def fake_send_dm(*a, **k):
+        calls.append(a)
+        return "ts"
+
+    monkeypatch.setattr(scheduler, "send_dm", fake_send_dm)
+    monkeypatch.setattr(scheduler, "AsyncSessionLocal", session_factory)
+
+    monkeypatch.setattr(scheduler.settings, "pending_reminder_days", 0)
+    await scheduler.job_pending_review_reminders()
+    assert calls == []
+
+    monkeypatch.setattr(scheduler.settings, "pending_reminder_days", 3)
+    monkeypatch.setattr(scheduler.settings, "updates_enabled", False)
+    await scheduler.job_pending_review_reminders()
+    assert calls == []
 
 
 async def test_auto_archive_opportunity_after_last_shift(

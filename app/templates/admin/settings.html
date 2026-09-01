@@ -74,6 +74,15 @@
       </div>
 
       <div class="mb-3 row align-items-center">
+        <label class="col-sm-7 col-form-label">Remind reviewer of pending every</label>
+        <div class="col-sm-5 input-group">
+          <input type="number" min="0" step="1" name="pending_reminder_days" class="form-control" value="{{ pending_reminder_days }}" required>
+          <span class="input-group-text">days</span>
+        </div>
+        <div class="form-text">Re-DM the reviewing mentor about a submission that's still pending this many days after it was logged, then again on that cadence. The submission is never removed. 0 = off.</div>
+      </div>
+
+      <div class="mb-3 row align-items-center">
         <label class="col-sm-7 col-form-label">Auto-archive opportunity after</label>
         <div class="col-sm-5 input-group">
           <input type="number" min="0" step="1" name="auto_archive_days" class="form-control" value="{{ auto_archive_days }}" required>

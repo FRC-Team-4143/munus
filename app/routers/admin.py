@@ -1174,6 +1174,7 @@ async def admin_settings_get(request: Request, db: AsyncSession = Depends(get_db
             "timezone": settings.timezone,
             "reminder_lead_hours": settings.reminder_lead_hours,
             "auto_reject_days": settings.auto_reject_days,
+            "pending_reminder_days": settings.pending_reminder_days,
             "auto_archive_days": settings.auto_archive_days,
             "backup_day": settings.backup_day,
             "backup_time": settings.backup_time,
@@ -1194,6 +1195,7 @@ async def admin_settings_post(
     timezone: str = Form(...),
     reminder_lead_hours: int = Form(...),
     auto_reject_days: int = Form(...),
+    pending_reminder_days: int = Form(...),
     auto_archive_days: int = Form(...),
     backup_day: str = Form(...),
     backup_time: str = Form(...),
@@ -1262,6 +1264,12 @@ async def admin_settings_post(
         env_updates["AUTO_REJECT_DAYS"] = str(auto_reject_days)
         settings.auto_reject_days = auto_reject_days
 
+    if pending_reminder_days < 0:
+        errors.append("Pending-review reminder days cannot be negative.")
+    elif pending_reminder_days != settings.pending_reminder_days:
+        env_updates["PENDING_REMINDER_DAYS"] = str(pending_reminder_days)
+        settings.pending_reminder_days = pending_reminder_days
+
     if auto_archive_days < 0:
         errors.append("Auto-archive days cannot be negative.")
     elif auto_archive_days != settings.auto_archive_days:
@@ -1287,6 +1295,7 @@ async def admin_settings_post(
         f"Updated settings (season_start={parsed or 'all-time'}; timezone={settings.timezone}; "
         f"backup={settings.backup_day} {settings.backup_time} keep={settings.backup_keep}; "
         f"reminder_lead_hours={settings.reminder_lead_hours}; auto_reject_days={settings.auto_reject_days}; "
+        f"pending_reminder_days={settings.pending_reminder_days}; "
         f"auto_archive_days={settings.auto_archive_days}; updates_enabled={settings.updates_enabled})",
         entity_type="settings",
     )
