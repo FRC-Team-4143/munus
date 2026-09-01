@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     # (records a rejected submission so it stops counting toward projected hours). 0 = off.
     auto_reject_days: int = 7
 
+    # Re-DM the reviewing mentor about a submission that's still pending, once it's this
+    # many days old and then again every this many days until it's approved/rejected. The
+    # submission itself is never removed — it sits pending indefinitely. 0 = off.
+    pending_reminder_days: int = 3
+
     # Auto-archive a shift-based opportunity this many days after its last shift ends
     # (archiving only flips is_active — logged hours are untouched, only /purge deletes
     # those). Continuous opportunities have no shifts and are never auto-archived; close

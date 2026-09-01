@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
@@ -201,6 +201,64 @@ async def job_auto_reject_unlogged() -> None:
     log.info("Auto-reject: closed %d unlogged shift(s)", rejected)
 
 
+async def job_pending_review_reminders() -> None:
+    """Re-DM the reviewing mentor about submissions still pending PENDING_REMINDER_DAYS
+    after they were logged, then again every PENDING_REMINDER_DAYS until a decision is
+    made. Nothing is ever removed — a pending submission sits in limbo indefinitely; this
+    just keeps nudging the approver. The nudge is the standard review card (Approve / Edit
+    hours / Reject), so it's actionable in place. Disabled when PENDING_REMINDER_DAYS <= 0.
+    Debounced by HourSubmission.reminder_sent_at."""
+    if not settings.updates_enabled:
+        log.info("Pending-review reminders skipped (updates_enabled=false)")
+        return
+    days = settings.pending_reminder_days
+    if days <= 0:
+        return
+    now = datetime.utcnow()
+    cutoff = now - timedelta(days=days)
+    async with AsyncSessionLocal() as db:
+        subs = (
+            await db.execute(
+                select(HourSubmission)
+                .options(
+                    selectinload(HourSubmission.student),
+                    selectinload(HourSubmission.opportunity),
+                    selectinload(HourSubmission.shift),
+                    selectinload(HourSubmission.reviewer),
+                )
+                .join(Student, Student.id == HourSubmission.student_id)
+                .where(
+                    HourSubmission.status == SubmissionStatus.pending,
+                    HourSubmission.submitted_at <= cutoff,
+                    or_(
+                        HourSubmission.reminder_sent_at.is_(None),
+                        HourSubmission.reminder_sent_at <= cutoff,
+                    ),
+                    Student.is_active.is_(True),
+                )
+            )
+        ).scalars().all()
+
+        nudged = 0
+        for submission in subs:
+            reviewer = submission.reviewer
+            # No resolvable reviewer to nudge (unrouted → Admin queue, or archived) —
+            # skip without stamping so a later reviewer assignment still triggers one.
+            if reviewer is None or not reviewer.is_active or not reviewer.slack_user_id:
+                continue
+            await send_dm(
+                reviewer.slack_user_id,
+                f"Reminder: {submission.student.name}'s hour submission is still waiting "
+                f"for your review.",
+                blocks=submissions.reviewer_blocks(submission),
+                automated=True,
+            )
+            submission.reminder_sent_at = now
+            nudged += 1
+        await db.commit()
+    log.info("Pending-review reminders: nudged %d submission(s)", nudged)
+
+
 async def job_auto_archive_opportunities() -> None:
     """Archive a shift-based opportunity once its last shift ended more than
     AUTO_ARCHIVE_DAYS ago. Archiving only flips is_active/archived_at — it never touches
@@ -277,8 +335,8 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
 
     Uses ``replace_existing=True`` so it is safe to call on a running scheduler
     to apply live changes to the backup schedule / timezone. The interval jobs
-    read ``reminder_lead_hours`` / ``auto_reject_days`` from settings at run
-    time, so those take effect without rescheduling.
+    read ``reminder_lead_hours`` / ``auto_reject_days`` / ``pending_reminder_days``
+    from settings at run time, so those take effect without rescheduling.
     """
     scheduler.add_job(
         job_shift_reminders,
@@ -296,6 +354,12 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         job_auto_reject_unlogged,
         IntervalTrigger(hours=6),
         id="auto_reject_unlogged",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        job_pending_review_reminders,
+        IntervalTrigger(hours=6),
+        id="pending_review_reminders",
         replace_existing=True,
     )
     scheduler.add_job(
