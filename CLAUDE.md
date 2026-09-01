@@ -239,38 +239,55 @@ Munus posts an announcement to `SLACK_ANNOUNCE_CHANNEL` (blank = off; the bot mu
 in that channel) at the moment there's finally something to act on: the **first shift**
 added to a shift-based opportunity (`admin_shift_create`), or immediately on creation
 for a **continuous** one (`admin_opportunities_create` — it has no shifts to wait for).
-The message (`opportunities.opportunity_announcement_blocks`) carries a **🙋 View & sign
-up** button — an *interactive* button (`action_id: opportunity_view`, opportunity id in
-`value`). The title renders in its own `header` block (Slack's
+The message (`opportunities.opportunity_announcement_blocks`) carries a button — an
+*interactive* button (`action_id: opportunity_view`, opportunity id in `value`), reading
+**🙋 View & sign up** for a shift-based opportunity or **📝 View & record hours** for a
+continuous one (there are no shifts to sign up for — logging hours directly *is* the
+action). The title renders in its own `header` block (Slack's
 only way to get larger text — mrkdwn `section` text has no font-size control), which
 means it's `plain_text` only and capped at 150 chars; `opportunity_announcement_blocks`
-truncates with `…` if `opp.name` pushes it over. The required flag, description, and
-info bullets (location/date/attire) live in a separate `section` block below it, each
-its own paragraph (blank `\n\n` line) so they don't read as one dense block.
+truncates with `…` if `opp.name` pushes it over. The required flag (🚨) and the ongoing
+flag (🔄) are mutually exclusive — `is_required` is always False on a continuous
+opportunity (`routers/admin.py` normalizes it on both create and edit, disabling the
+checkbox client-side too) — followed by description and info bullets (location/date/
+attire), all in a separate `section` block below the header, each its own paragraph
+(blank `\n\n` line) so they don't read as one dense block.
 
 **Clicking it opens a modal — it posts nothing.** A shared-channel message can't carry
 a per-person link (a `url` button is rendered client-side and never reaches our server,
 so it can't know who clicked), but the *click* identifies the clicker.
-`routers/slack.py`'s `_handle_opportunity_view` uses that to open
-`opportunities.opportunity_signup_modal` via `views.open`: the student picks a shift and
-submits, and `_handle_opportunity_signup_submit` calls the same
-`opportunities.signup_student` the web portal does, so capacity and duplicate handling
-can't drift between the two. No message, no browser, no sign-in.
+`routers/slack.py`'s `_handle_opportunity_view` uses that to open one of two modals via
+`views.open`. For a shift-based opportunity, `opportunities.opportunity_signup_modal`:
+the student picks a shift and submits, and `_handle_opportunity_signup_submit` calls the
+same `opportunities.signup_student` the web portal does, so capacity and duplicate
+handling can't drift between the two. For a continuous opportunity (a linked student
+only — see below), `opportunities.opportunity_log_hours_modal` instead: an hours + notes
+form, submitted to `_handle_opportunity_log_hours_submit`, which calls the same
+`submissions.submit_opportunity_hours` the web `/opportunities/{id}/log-hours` form
+does. No message, no browser, no sign-in, either way.
 
 Notes:
 - **Open the modal inline, never from a background task** — `trigger_id` expires in ~3s
   (same constraint as `hours_adjust`).
-- `notice=` replaces the shift picker *and* drops the submit button, for the cases with
-  nothing to sign up for: a continuous opportunity, no upcoming shifts, a mentor
+- `opportunity_signup_modal`'s `notice=` replaces the shift picker *and* drops the submit
+  button, for the cases with nothing to sign up for: no upcoming shifts, a mentor
   (read-only here, as on the web), or an unlinked Slack account. Each says which —
-  "nothing happened" is indistinguishable from a broken button.
+  "nothing happened" is indistinguishable from a broken button. A continuous opportunity
+  is a separate branch in `_handle_opportunity_view`, not a `notice` — it gets the real
+  log-hours form instead of a "go log it on the web" message.
 - A rejected signup (full, already signed up, shift not on this opportunity) returns
-  Slack's `response_action: errors`, keeping the modal open so they can pick again.
-  `private_metadata` is attacker-controlled like any form field, hence the
-  shift-belongs-to-opportunity check.
-- **Both** `opportunity_view` (action) and `opportunity_signup` (callback) must stay
-  registered in Legion's `routers/slack_dispatch.py` — unrouted ids are swallowed with a
-  200, so a missing entry silently drops the click or the signup.
+  Slack's `response_action: errors`, keeping the modal open so they can pick again; bad
+  hours (non-numeric, ≤ 0) on either modal does the same. `private_metadata` is
+  attacker-controlled like any form field, hence the shift-belongs-to-opportunity check.
+- A student can join more than one shift on the same opportunity — `signup_student` only
+  blocks a duplicate on the *same* shift, and the channel button stays tappable after a
+  signup rather than being consumed by one. `opportunity_signup_modal` calls out any
+  shift the student's already joined by name, above the picker, using the `signed_up`
+  flag `shift_options_for_modal` already computes — not just the "✅ signed up" suffix
+  on that option in the dropdown, which is easy to miss before picking a second shift.
+- **All of** `opportunity_view` (action), `opportunity_signup`, and `opportunity_log_hours`
+  (callbacks) must stay registered in Legion's `routers/slack_dispatch.py` — unrouted ids
+  are swallowed with a 200, so a missing entry silently drops the click or the submission.
 
 Two earlier designs were tried and rejected. A plain `url` link button to
 `{BASE_URL}/opportunities/{id}` looked like one tap, but traded on a live session

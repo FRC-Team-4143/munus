@@ -437,6 +437,43 @@ async def test_modal_marks_full_and_already_signed_up_shifts(
     assert "FULL" in labels[str(full.id)]
 
 
+async def test_modal_calls_out_shifts_the_student_already_joined(
+    client, db, capture_modal, make_student, make_opportunity, make_shift
+):
+    """A student can join more than one shift on an opportunity — the already-joined
+    ones get their own callout above the picker, not just a label buried in the
+    dropdown, since the channel button stays tappable for picking a second shift."""
+    student = await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity()
+    joined = await make_shift(opp.id, start_in_hours=24)
+    open_shift = await make_shift(opp.id, start_in_hours=48)
+    db.add(Signup(shift_id=joined.id, student_id=student.id, status=SignupStatus.signed_up))
+    await db.commit()
+
+    await _interact(client, _view_payload("U0STU", opp.id))
+
+    (view,) = capture_modal
+    text = _modal_text(view)
+    assert "You're already signed up for" in text
+    from app.utils import format_shift_range
+    assert format_shift_range(joined.start_time, joined.end_time) in text
+    # The other, still-open shift isn't mistaken for one they've joined.
+    assert format_shift_range(open_shift.start_time, open_shift.end_time) not in text
+
+
+async def test_modal_omits_callout_when_nothing_joined_yet(
+    client, capture_modal, make_student, make_opportunity, make_shift
+):
+    await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity()
+    await make_shift(opp.id, start_in_hours=24)
+
+    await _interact(client, _view_payload("U0STU", opp.id))
+
+    (view,) = capture_modal
+    assert "already signed up" not in _modal_text(view)
+
+
 async def test_modal_for_a_mentor_is_read_only(
     client, capture_modal, make_mentor, make_opportunity, make_shift
 ):
@@ -452,17 +489,21 @@ async def test_modal_for_a_mentor_is_read_only(
     assert "Mentors don't sign up" in _modal_text(view)
 
 
-async def test_modal_for_a_continuous_opportunity_has_no_shift_picker(
+async def test_modal_for_a_continuous_opportunity_is_an_hours_form(
     client, capture_modal, make_student, make_opportunity
 ):
+    """No shifts to pick, so the modal skips straight to logging hours."""
     await make_student(slack="U0STU", code="stu00001")
     opp = await make_opportunity(is_continuous=True)
 
     await _interact(client, _view_payload("U0STU", opp.id))
 
     (view,) = capture_modal
-    assert "submit" not in view
-    assert "ongoing opportunity" in _modal_text(view)
+    assert view["callback_id"] == "opportunity_log_hours"
+    assert view["private_metadata"] == str(opp.id)
+    assert view["submit"]["text"] == "Log hours"
+    block_ids = {b.get("block_id") for b in view["blocks"]}
+    assert {"hours", "report"} <= block_ids
 
 
 async def test_modal_tells_an_unlinked_user_why(
@@ -540,6 +581,52 @@ async def test_submitting_without_picking_a_shift_errors(
     resp = await _interact(client, _submit_payload("U0STU", opp.id, None))
 
     assert resp.json()["response_action"] == "errors"
+
+
+def _log_hours_payload(slack_id: str, opp_id: int, hours: str, report: str | None = None) -> dict:
+    return {
+        "type": "view_submission",
+        "user": {"id": slack_id},
+        "view": {
+            "callback_id": "opportunity_log_hours",
+            "private_metadata": str(opp_id),
+            "state": {"values": {
+                "hours": {"value": {"value": hours}},
+                "report": {"value": {"value": report}},
+            }},
+        },
+    }
+
+
+async def test_submitting_the_log_hours_modal_creates_a_pending_submission(
+    client, db, hush_slack, make_student, make_opportunity
+):
+    """Continuous-opportunity counterpart to test_view_submission_logs_adjusted_hours —
+    same `submit_opportunity_hours` path the web log-hours form uses, just reached via
+    the announcement's modal instead."""
+    await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity(is_continuous=True)
+
+    resp = await _interact(client, _log_hours_payload("U0STU", opp.id, "2.5", "Sorted donations"))
+
+    assert resp.status_code == 200
+    sub = (await db.execute(select(HourSubmission))).scalars().first()
+    assert sub is not None
+    assert sub.opportunity_id == opp.id and sub.shift_id is None
+    assert sub.hours == 2.5 and sub.report == "Sorted donations"
+    assert sub.status == SubmissionStatus.pending
+
+
+async def test_submitting_the_log_hours_modal_with_bad_hours_returns_errors(
+    client, db, make_student, make_opportunity
+):
+    await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity(is_continuous=True)
+
+    resp = await _interact(client, _log_hours_payload("U0STU", opp.id, "not-a-number"))
+
+    assert resp.json().get("response_action") == "errors"
+    assert (await db.execute(select(HourSubmission))).scalars().first() is None
 
 
 async def test_modal_carries_a_per_person_link_to_the_full_page(

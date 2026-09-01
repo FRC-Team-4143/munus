@@ -184,6 +184,10 @@ async def slack_interact(
             return await _handle_review_edit_submit(db, background_tasks, view, acting_slack_id)
         if cb == opp_service.SIGNUP_CALLBACK:  # announcement's "View & sign up" modal
             return await _handle_opportunity_signup_submit(db, view, acting_slack_id)
+        if cb == opp_service.LOG_HOURS_CALLBACK:  # announcement's "View & record hours" modal
+            return await _handle_opportunity_log_hours_submit(
+                db, background_tasks, view, acting_slack_id
+            )
         return Response(status_code=200)
 
     if ptype != "block_actions":
@@ -281,6 +285,10 @@ async def _handle_opportunity_view(
     Mentors get the details read-only, matching their status on the opportunity page
     (`_current_mentor` in routers/portal.py) — the announcement lands in a channel
     they're in too, so the button must not dead-end them.
+
+    A linked student on a **continuous** opportunity skips the shift picker entirely —
+    there's nothing to sign up for — and instead gets `opportunity_log_hours_modal`,
+    handled by `_handle_opportunity_log_hours_submit`.
     """
     try:
         opp_id = int(value)
@@ -328,7 +336,11 @@ async def _handle_opportunity_view(
         )
         member_code = mentor.member_code if mentor is not None else None
     elif opp.is_continuous:
-        notice = "_This is an ongoing opportunity — no shifts to sign up for. Just log your hours when you've helped._"
+        details_url = make_link_url(member_code, f"/opportunities/{opp.id}")
+        await open_modal(
+            trigger_id, opp_service.opportunity_log_hours_modal(opp, details_url=details_url)
+        )
+        return Response(status_code=200)
     else:
         shift_rows = await opp_service.shift_options_for_modal(db, opp, student.id)
         if not shift_rows:
@@ -393,6 +405,58 @@ async def _handle_opportunity_signup_submit(db: AsyncSession, view: dict, acting
         # open so they can pick another shift instead of losing the dialog.
         return _modal_error("shift", message)
     return Response(status_code=200)
+
+
+async def _handle_opportunity_log_hours_submit(
+    db: AsyncSession, background_tasks: BackgroundTasks, view: dict, acting_slack_id: str
+):
+    """Submission of a continuous opportunity's "View & record hours" modal — creates a
+    pending submission logged directly against the opportunity, reusing the same
+    `submit_opportunity_hours` the web `/opportunities/{id}/log-hours` form calls so
+    reviewer routing can't drift between the two. No idempotency guard here either,
+    matching `submit_opportunity_hours` — logging repeatedly against an ongoing
+    opportunity over the season is expected, not a duplicate to reject."""
+    try:
+        opp_id = int(view.get("private_metadata", ""))
+    except ValueError:
+        return Response(status_code=200)
+
+    values = view.get("state", {}).get("values", {})
+    hours_raw = values.get("hours", {}).get("value", {}).get("value", "")
+    report_raw = values.get("report", {}).get("value", {}).get("value")
+    try:
+        hours = float(hours_raw)
+        if hours <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return _modal_error("hours", "Enter a positive number of hours.")
+
+    student = (
+        await db.execute(
+            select(Student).where(
+                Student.slack_user_id == acting_slack_id, Student.is_active.is_(True)
+            )
+        )
+    ).scalars().first() if acting_slack_id else None
+    if student is None:
+        return Response(status_code=200)  # close silently — account changed mid-flow
+
+    opp = (
+        await db.execute(select(Opportunity).where(Opportunity.id == opp_id))
+    ).scalars().first()
+    if opp is None or not opp.is_continuous or not opp.is_active:
+        return Response(status_code=200)
+
+    submission = await submissions.submit_opportunity_hours(
+        db, student.id, opp, round(hours, 2), report_raw.strip() if report_raw else None
+    )
+    reviewer_name = await _reviewer_name(db, submission)
+    dest = f"sent to {reviewer_name} for approval" if reviewer_name else "sent for review"
+    background_tasks.add_task(submissions.notify_reviewer, submission.id)
+    background_tasks.add_task(
+        send_dm, student.slack_user_id, f"✅ Logged {submission.hours:g} hrs — {dest}."
+    )
+    return Response(status_code=200)  # empty 200 closes the modal
 
 
 def _modal_error(block_id: str, message: str) -> JSONResponse:
