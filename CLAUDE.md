@@ -324,6 +324,23 @@ opportunity already has an announcement, or if `SLACK_ANNOUNCE_CHANNEL` is still
 the latter surfaces as an inline error rather than a silent no-op, since an admin
 clicking the button has already decided it should post.
 
+**Archiving syncs the announcement too, in both directions.** Manually archiving/
+restoring (`admin_opportunities_archive`) and the auto-archive job
+(`job_auto_archive_opportunities`, shift-based only) both call `update_announcement`
+right after flipping `is_active` — same no-op-if-never-announced rule as any other edit.
+An archived opportunity (either type) gets a "🗄️ Archived — no longer accepting signups
+or hours" line in place of the required/ongoing flags (showing both would read as
+contradictory) and a "🗄️ Archived" button, still interactive but routed by
+`_handle_opportunity_view` to a notice-only `opportunity_signup_modal` for *anyone* who
+clicks it, regardless of role or opportunity type — no shift picker, no log-hours form.
+Restoring flips all of this back, since it's just re-rendering `opp`'s current state.
+The submit handlers check `is_active` too, independently of the button routing — a
+form already open in someone's hand when the archive happens gets rejected rather than
+silently accepted (a visible modal error for log-hours; "that shift is no longer
+available" for signup, via the same `Opportunity.is_active` join the web portal's
+`/shifts/{id}/signup` uses) — closing a gap that, for shift-based signups, existed on
+both surfaces even before archiving got wired into the announcement.
+
 ### CSV exports
 `/admin/report/export`, opened via the report page's **Export CSV** button (a modal for
 picking a date range — blank means all-time — and an "include archived students"

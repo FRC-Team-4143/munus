@@ -506,6 +506,38 @@ async def test_modal_for_a_continuous_opportunity_is_an_hours_form(
     assert {"hours", "report"} <= block_ids
 
 
+async def test_modal_for_an_archived_shift_based_opportunity_is_notice_only(
+    client, capture_modal, make_student, make_opportunity, make_shift
+):
+    """Archived closes the door the same way regardless of type — no shift picker, just
+    why, and the button click never reaches signup_student."""
+    await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity(is_active=False)
+    await make_shift(opp.id, start_in_hours=24)
+
+    await _interact(client, _view_payload("U0STU", opp.id))
+
+    (view,) = capture_modal
+    assert view["callback_id"] == "opportunity_signup"
+    assert "submit" not in view
+    assert "archived" in _modal_text(view)
+
+
+async def test_modal_for_an_archived_continuous_opportunity_is_notice_only(
+    client, capture_modal, make_student, make_opportunity
+):
+    await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity(is_continuous=True, is_active=False)
+
+    await _interact(client, _view_payload("U0STU", opp.id))
+
+    (view,) = capture_modal
+    # Routed to the same notice-only signup modal as shift-based, not the hours form.
+    assert view["callback_id"] == "opportunity_signup"
+    assert "submit" not in view
+    assert "archived" in _modal_text(view)
+
+
 async def test_modal_tells_an_unlinked_user_why(
     client, capture_modal, make_opportunity, make_shift
 ):
@@ -572,6 +604,24 @@ async def test_submitting_a_shift_from_another_opportunity_is_rejected(
     assert resp.json()["response_action"] == "errors"
 
 
+async def test_submitting_a_signup_for_an_archived_opportunity_is_rejected(
+    client, db, make_student, make_opportunity, make_shift
+):
+    """Guards a modal opened before an archive raced with this submit — the button now
+    bounces new clicks to a notice-only modal, but one already open shouldn't still be
+    able to create a real signup."""
+    student = await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity(is_active=False)
+    shift = await make_shift(opp.id, start_in_hours=24)
+
+    resp = await _interact(client, _submit_payload("U0STU", opp.id, shift.id))
+
+    assert resp.json()["response_action"] == "errors"
+    assert (
+        await db.execute(select(Signup).where(Signup.student_id == student.id))
+    ).scalars().first() is None
+
+
 async def test_submitting_without_picking_a_shift_errors(
     client, make_student, make_opportunity
 ):
@@ -626,6 +676,23 @@ async def test_submitting_the_log_hours_modal_with_bad_hours_returns_errors(
     resp = await _interact(client, _log_hours_payload("U0STU", opp.id, "not-a-number"))
 
     assert resp.json().get("response_action") == "errors"
+    assert (await db.execute(select(HourSubmission))).scalars().first() is None
+
+
+async def test_submitting_the_log_hours_modal_for_an_archived_opportunity_is_rejected(
+    client, db, make_student, make_opportunity
+):
+    """Same race as the shift-based signup modal: the button now bounces new clicks to
+    a notice-only modal, but a log-hours form already open shouldn't still be able to
+    create a real submission — and this one gets a visible error rather than the modal
+    just closing as if the hours were logged."""
+    await make_student(slack="U0STU", code="stu00001")
+    opp = await make_opportunity(is_continuous=True, is_active=False)
+
+    resp = await _interact(client, _log_hours_payload("U0STU", opp.id, "2.5"))
+
+    assert resp.json().get("response_action") == "errors"
+    assert "archived" in resp.json()["errors"]["hours"].lower()
     assert (await db.execute(select(HourSubmission))).scalars().first() is None
 
 

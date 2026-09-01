@@ -518,13 +518,20 @@ async def admin_opportunities_announce(opp_id: int, request: Request, db: AsyncS
 async def admin_opportunities_archive(opp_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     if redirect := _require_auth(request):
         return redirect
-    opp = (await db.execute(select(Opportunity).where(Opportunity.id == opp_id))).scalars().first()
+    opp = (
+        await db.execute(
+            select(Opportunity).options(selectinload(Opportunity.shifts)).where(Opportunity.id == opp_id)
+        )
+    ).scalars().first()
     if opp:
         opp.is_active = not opp.is_active
         opp.archived_at = datetime.utcnow() if not opp.is_active else None
         verb = "archive" if not opp.is_active else "restore"
         await audit.record(db, request, f"opportunity.{verb}", f"{verb.capitalize()}d opportunity {opp.name}", entity_type="opportunity", entity_id=opp.id)
         await db.commit()
+        # Keep an already-posted announcement in sync either way — restoring un-archives
+        # the message too, since this just re-renders opp's current state.
+        await update_announcement(db, opp)
     return RedirectResponse("/admin/opportunities?show_archived=1", status_code=303)
 
 

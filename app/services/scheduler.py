@@ -20,6 +20,7 @@ from app.models import (
     HourSubmission, Opportunity, Shift, Signup, SignupStatus, Student, SubmissionStatus,
 )
 from app.services import audit, submissions
+from app.services.opportunities import update_announcement
 from app.services.slack_client import send_dm
 from app.utils import format_shift_range, shift_length_hours
 
@@ -284,7 +285,7 @@ async def job_auto_archive_opportunities() -> None:
             )
         ).scalars().all()
 
-        archived = 0
+        newly_archived = []
         for opp in opps:
             if not opp.shifts:
                 continue  # never had a shift yet — nothing to measure "last shift" from
@@ -297,9 +298,13 @@ async def job_auto_archive_opportunities() -> None:
                     f"Auto-archived opportunity {opp.name} ({days}d after its last shift ended)",
                     entity_type="opportunity", entity_id=opp.id,
                 )
-                archived += 1
+                newly_archived.append(opp)
         await db.commit()
-    log.info("Auto-archive: archived %d opportunity(ies)", archived)
+        # Keep an already-posted announcement from advertising a now-closed opportunity
+        # indefinitely — no-op via update_announcement for one that was never announced.
+        for opp in newly_archived:
+            await update_announcement(db, opp)
+    log.info("Auto-archive: archived %d opportunity(ies)", len(newly_archived))
 
 
 async def job_nightly_backup() -> None:

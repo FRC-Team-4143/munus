@@ -811,6 +811,52 @@ async def test_admin_edit_does_not_call_slack_when_never_announced(client, db, m
     assert resp.status_code == 303
 
 
+async def test_admin_archive_syncs_slack_announcement(client, db, make_opportunity, monkeypatch):
+    """Archiving must update an already-posted announcement to say so — otherwise it
+    keeps advertising a closed opportunity indefinitely."""
+    import app.services.opportunities as opp_module
+
+    calls = []
+
+    async def fake_update_channel_message(channel_id, ts, text, blocks=None, automated=True):
+        calls.append(text)
+        return True
+
+    monkeypatch.setattr(opp_module, "update_channel_message", fake_update_channel_message)
+
+    await _login(client)
+    opp = await make_opportunity(
+        name="Bag Night", announcement_channel_id="C0ANNOUNCE", announcement_ts="1699999999.000100",
+    )
+
+    resp = await client.post(f"/admin/opportunities/{opp.id}/archive", follow_redirects=False)
+    assert resp.status_code == 303
+
+    assert len(calls) == 1
+    assert "Archived" in calls[0]
+
+    # Restoring syncs it back — same call, opp.is_active is just True again by then.
+    resp = await client.post(f"/admin/opportunities/{opp.id}/archive", follow_redirects=False)
+    assert resp.status_code == 303
+    assert len(calls) == 2
+    assert "Archived" not in calls[1]
+
+
+async def test_admin_archive_does_not_call_slack_when_never_announced(client, db, make_opportunity, monkeypatch):
+    import app.services.opportunities as opp_module
+
+    async def fail_if_called(*a, **k):
+        raise AssertionError("update_channel_message should not be called")
+
+    monkeypatch.setattr(opp_module, "update_channel_message", fail_if_called)
+
+    await _login(client)
+    opp = await make_opportunity(name="Food Drive")
+
+    resp = await client.post(f"/admin/opportunities/{opp.id}/archive", follow_redirects=False)
+    assert resp.status_code == 303
+
+
 async def test_admin_announce_now_posts_and_persists(client, db, make_opportunity, monkeypatch):
     """The manual "Post announcement now" action is how an opportunity that missed its
     normal trigger (e.g. SLACK_ANNOUNCE_CHANNEL was blank at creation) can still get

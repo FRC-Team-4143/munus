@@ -419,6 +419,34 @@ async def test_auto_archive_opportunity_after_last_shift(
     assert stale.archived_at == prev_archived_at
 
 
+async def test_auto_archive_syncs_slack_announcement(
+    db, session_factory, make_opportunity, make_shift, monkeypatch
+):
+    """Auto-archiving must not leave an already-posted announcement advertising a
+    now-closed opportunity forever — it has to sync the same way the manual archive
+    action does."""
+    import app.services.opportunities as opp_module
+
+    calls = []
+
+    async def fake_update_channel_message(channel_id, ts, text, blocks=None, automated=True):
+        calls.append(text)
+        return True
+
+    monkeypatch.setattr(opp_module, "update_channel_message", fake_update_channel_message)
+    monkeypatch.setattr(scheduler, "AsyncSessionLocal", session_factory)
+
+    stale = await make_opportunity(
+        name="Past Bake Sale", announcement_channel_id="C0ANNOUNCE", announcement_ts="1699999999.000100",
+    )
+    await make_shift(stale.id, start_in_hours=-72, length_hours=2)
+
+    await scheduler.job_auto_archive_opportunities()
+
+    assert len(calls) == 1
+    assert "Archived" in calls[0]
+
+
 async def test_auto_archive_respects_disable_and_hours_persist(
     db, session_factory, make_student, make_opportunity, make_shift, monkeypatch
 ):
