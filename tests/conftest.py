@@ -19,6 +19,57 @@ from app.models import (
 )
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _block_slack_network():
+    """Hard backstop: no test may reach Slack, whatever is in the ambient .env.
+
+    A dev checkout's real .env can carry a live SLACK_BOT_TOKEN + a real
+    SLACK_ANNOUNCE_CHANNEL, and a few route tests exercise the opportunity /
+    first-shift announcement path (and DM paths) without stubbing them. Against real
+    creds that posts to the live channel. Every outbound Slack call funnels through
+    either `slack_client.get_slack_client()` (Web API) or
+    `slack_sdk.webhook.async_client.AsyncWebhookClient` (response_url) — this neuters
+    both for the whole session. Tests that stub `post_to_channel` / `send_dm` /
+    `AsyncWebhookClient` at a higher layer are unaffected; unstubbed paths simply
+    become no-ops instead of network calls.
+    """
+    import app.services.slack_client as slack_client
+    import slack_sdk.webhook.async_client as whmod
+
+    class _DeadSlackClient:
+        async def conversations_open(self, *a, **k):
+            return {"channel": {"id": "D_TEST_BLOCKED"}}
+
+        async def chat_postMessage(self, *a, **k):
+            return {"ok": True, "ts": "0000000000.000000", "channel": "C_TEST_BLOCKED"}
+
+        async def chat_update(self, *a, **k):
+            return {"ok": True, "ts": "0000000000.000000"}
+
+        async def views_open(self, *a, **k):
+            return {"ok": True}
+
+    class _DeadWebhookClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def send(self, *a, **k):
+            return None
+
+    dead = _DeadSlackClient()
+    orig_get, orig_client = slack_client.get_slack_client, slack_client._client
+    orig_wh = whmod.AsyncWebhookClient
+    slack_client.get_slack_client = lambda: dead
+    slack_client._client = dead
+    whmod.AsyncWebhookClient = _DeadWebhookClient
+    try:
+        yield
+    finally:
+        slack_client.get_slack_client = orig_get
+        slack_client._client = orig_client
+        whmod.AsyncWebhookClient = orig_wh
+
+
 @pytest_asyncio.fixture
 async def engine():
     """A fresh in-memory database engine with all tables created."""
