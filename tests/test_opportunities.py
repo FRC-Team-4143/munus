@@ -43,14 +43,6 @@ def test_announcement_flags_required_opportunity():
     assert blocks[1]["text"]["text"] == "🚨 *Required — every active student must sign up for at least 1 shift.*"
 
 
-def test_announcement_flags_required_continuous_opportunity_without_mentioning_shifts():
-    """A continuous opportunity has no shifts — the required-flag copy shouldn't imply
-    there's one to sign up for."""
-    opp = Opportunity(id=1, name="CAD Subteam", is_required=True, is_continuous=True)
-    _, blocks = opportunity_announcement_blocks(opp)
-    assert blocks[1]["text"]["text"] == "🚨 *Required — every active student must log hours here.*"
-
-
 def test_announcement_omits_required_flag_when_not_required():
     opp = Opportunity(id=1, name="Food Drive", is_required=False)
     text, _ = opportunity_announcement_blocks(opp)

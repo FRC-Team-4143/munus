@@ -203,11 +203,10 @@ def opportunity_announcement_blocks(opp: Opportunity) -> tuple[str, list]:
     # group keeps its lines (e.g. the info bullets) tight against each other.
     groups = []
     if opp.is_required:
-        required_copy = (
-            "🚨 *Required — every active student must log hours here.*" if opp.is_continuous
-            else "🚨 *Required — every active student must sign up for at least 1 shift.*"
-        )
-        groups.append(required_copy)
+        # is_required is only ever True for a shift-based opportunity — routers/admin.py
+        # normalizes it to False for a continuous one on both create and edit, so this
+        # copy never needs continuous-specific wording.
+        groups.append("🚨 *Required — every active student must sign up for at least 1 shift.*")
     if opp.description:
         groups.append(opp.description)
     if info:
@@ -366,10 +365,12 @@ def opportunity_log_hours_modal(opp: Opportunity, *, details_url: Optional[str] 
     `routers.slack._handle_opportunity_log_hours_submit`, which calls the same
     `submissions.submit_opportunity_hours` the web `/opportunities/{id}/log-hours` form
     does, so reviewer routing can't drift between the two.
+
+    No `is_required` flag here — `routers/admin.py` normalizes that field to False for
+    any continuous opportunity on both create and edit, so one can never actually be
+    required.
     """
     details = []
-    if opp.is_required:
-        details.append("🚨 *Required — every active student must log hours here.*")
     if opp.description:
         details.append(opp.description)
     info = []
