@@ -22,26 +22,18 @@ async def test_admin_forbidden_without_group(client):
     assert resp.status_code == 403
 
 
-async def test_admin_sends_a_magic_link_identity_to_sign_in_rather_than_403(client):
+async def test_admin_sends_a_magic_link_identity_to_stepup_rather_than_403(client):
     """A magic-link cookie is deliberately non-privileged (Legion strips `groups` and
-    marks it `via: "link"`), so it can never reach /admin. Bounce it to a real sign-in
-    instead of a dead-end 403 — the person may well be an admin who just arrived from a
-    Slack link and can simply step up."""
-    from itsdangerous import URLSafeTimedSerializer
-
-    from app.config import settings
-
-    signer = URLSafeTimedSerializer(settings.sso_secret, salt="mw-sso")
-    client.cookies.set(SSO_COOKIE, signer.dumps({
-        "member_code": "test0001", "username": "test.admin", "name": "Test Admin",
-        "role": "mentor", "team_number": 4143, "groups": [], "slack_user_id": None,
-        "via": "link",
-    }))
+    marks it `via: "link"`), so it can never reach /admin. Bounce it to `/sso/stepup`
+    (a fresh Approve/Deny that re-mints the cookie *with* groups, landing back here)
+    instead of a dead-end 403 — and not `/sso/authorize`, which would just bounce the
+    link cookie straight back and loop."""
+    client.cookies.set(SSO_COOKIE, make_sso_cookie(groups=(), via="link"))
 
     resp = await client.get("/admin/roster", follow_redirects=False)
 
     assert resp.status_code == 303
-    assert "sso/authorize" in resp.headers["location"]
+    assert "/sso/stepup?app=munus" in resp.headers["location"]
 
 
 @pytest.mark.parametrize("path", [

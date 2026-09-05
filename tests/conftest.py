@@ -217,16 +217,20 @@ async def client(session_factory, monkeypatch):
 def make_sso_cookie(
     groups=("munus-admin",), *, name="Test Admin", username="test.admin",
     role="mentor", member_code="test0001", team_number=4143, slack_user_id=None,
+    via=None,
 ):
     """Mint a valid `mw_sso` cookie value for tests, mirroring Legion's `make_sso_token`.
     Uses the app's own `sso_secret`, so `read_sso_token` verifies it. `role="student"` +
     a `member_code` matching a `make_student(code=...)` row is what the portal resolves
-    `_current_student` from."""
+    `_current_student` from.
+
+    `via="link"` mimics a magic-link identity (Legion's `make_link_sso_token`), which is
+    deliberately non-privileged — pass `groups=()` with it to match what Legion mints."""
     from itsdangerous import URLSafeTimedSerializer
     from app.config import settings
 
     signer = URLSafeTimedSerializer(settings.sso_secret, salt="mw-sso")
-    return signer.dumps({
+    claims = {
         "member_code": member_code,
         "username": username,
         "name": name,
@@ -234,7 +238,10 @@ def make_sso_cookie(
         "team_number": team_number,
         "groups": list(groups),
         "slack_user_id": slack_user_id,
-    })
+    }
+    if via is not None:
+        claims["via"] = via
+    return signer.dumps(claims)
 
 
 def magic_link_payloads(text: str) -> list[dict]:

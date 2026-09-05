@@ -64,6 +64,22 @@ def make_authorize_url(request: Request, *, return_to: Optional[str] = None) -> 
     return f"{settings.legion_base_url}/sso/authorize?app=munus&return_to={quote(target, safe='')}"
 
 
+def stepup_url(request: Request, *, return_to: Optional[str] = None) -> str:
+    """Step a magic-link session up to a full one: Legion's `/sso/stepup` re-mints
+    `mw_sso` WITH groups via a fresh Slack Approve/Deny — no sign-out first.
+
+    Same shape and same absolute-`return_to` handling as `make_authorize_url`, but a
+    distinct Legion endpoint on purpose: a `via="link"` cookie that lands on
+    `/sso/authorize` counts as "already signed in" and is bounced straight back — and
+    since `_require_auth` sends link identities here, that would loop.
+    """
+    if return_to is not None:
+        target = return_to if urlparse(return_to).netloc else f"{settings.base_url}{return_to}"
+    else:
+        target = str(request.url)
+    return f"{settings.legion_base_url}/sso/stepup?app=munus&return_to={quote(target, safe='')}"
+
+
 def logout_url(request: Request, *, return_to: str = "/") -> str:
     """Legion's single-logout endpoint, returning to `return_to` (a Munus path) afterward."""
     base = f"{request.url.scheme}://{request.url.netloc}{return_to}"
