@@ -40,6 +40,12 @@
     /* Projected (upcoming-shift) hours: a distinct color + stripes so it reads clearly
        apart from the solid green "earned" hours. */
     .progress-bar.bar-projected { background-color: #7b6cf6; }
+    .stepup-bar {
+      background: #1a0f0f; border: 1px solid rgba(204, 34, 0, 0.4); border-radius: 10px;
+      padding: 0.6rem 0.9rem; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+    }
+    .stepup-bar .stepup-msg { color: #9a7878; font-size: 0.9rem; flex: 1 1 240px; }
+    .stepup-bar > .bi { color: #e05540; }
   </style>
   {% block head %}{% endblock %}
 </head>
@@ -75,6 +81,17 @@
     </ul>
   </div>
 </nav>
+{% if identity and identity.via == 'link' and legion_base_url() %}
+<div class="container mb-4">
+  <div class="stepup-bar">
+    <i class="bi bi-shield-lock"></i>
+    <span class="stepup-msg">You opened Munus from a Slack quick link — you're in limited mode, so admin tools stay hidden.</span>
+    <a class="btn btn-outline-primary btn-sm" href="{{ stepup_url(request) }}">
+      <i class="bi bi-box-arrow-in-right me-1"></i>Sign in with Legion
+    </a>
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 <main class="container pb-5">
   {% block content %}{% endblock %}
