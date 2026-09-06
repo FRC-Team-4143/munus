@@ -37,7 +37,7 @@ from app.services.requirements import (
     season_total_hours,
 )
 from app.services.slack_client import send_dm
-from app.services.sso import logout_url, make_authorize_url, sso_identity
+from app.services.sso import logout_url, make_authorize_url, sso_identity, stepup_url
 from app.utils import (
     format_date_range, format_shift_range, local_to_utc, now_utc,
     today_local, utc_to_local,
@@ -169,10 +169,13 @@ def _require_auth(request: Request):
     # A magic-link identity carries no groups by construction (Legion's
     # `make_link_sso_token`), so it already fails every check below — but treat it as
     # "not signed in strongly enough" rather than "not allowed", since the person may
-    # well be an admin who just arrived from a Slack link. Send them to a real sign-in
-    # instead of stranding them on a 403.
+    # well be an admin who just arrived from a Slack link. Send them through the step-up
+    # (fresh Approve/Deny, re-mint with groups, land back on this page) instead of
+    # stranding them on a 403.
     if identity.get("via") == "link":
-        return RedirectResponse(make_authorize_url(request), status_code=303)
+        return RedirectResponse(
+            stepup_url(request, return_to=request.url.path), status_code=303
+        )
     groups = set(identity.get("groups") or [])
     if _ADMIN_GROUP in groups:
         return None

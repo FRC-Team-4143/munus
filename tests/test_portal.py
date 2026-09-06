@@ -671,6 +671,38 @@ async def test_portal_navbar_hides_legion_link_when_unconfigured(client, make_st
         settings.legion_base_url = original
 
 
+async def test_magic_link_session_sees_the_stepup_banner(client, make_student):
+    """A `via="link"` session (Slack quick link) gets a visible offer to step up to a
+    full sign-in from the portal, without signing out first."""
+    from app.config import settings
+    original = settings.legion_base_url
+    try:
+        settings.legion_base_url = "https://legion.example.org"
+        await make_student(code="link0001")
+        client.cookies.set(SSO_COOKIE, make_sso_cookie(
+            role="student", member_code="link0001", groups=(), via="link",
+        ))
+        resp = await client.get("/me")
+        assert resp.status_code == 200
+        assert "https://legion.example.org/sso/stepup?app=munus" in resp.text
+        assert "quick link" in resp.text
+    finally:
+        settings.legion_base_url = original
+
+
+async def test_normal_session_has_no_stepup_banner(client, make_student):
+    from app.config import settings
+    original = settings.legion_base_url
+    try:
+        settings.legion_base_url = "https://legion.example.org"
+        await make_student(code="plain004")
+        await _identify(client, "plain004")
+        resp = await client.get("/me")
+        assert "/sso/stepup" not in resp.text
+    finally:
+        settings.legion_base_url = original
+
+
 async def test_root_redirects_to_me(client):
     """The dashboard is canonically /me (matching Tempus); / just redirects to it."""
     resp = await client.get("/", follow_redirects=False)

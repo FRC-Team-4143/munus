@@ -28,7 +28,7 @@ from app.services import legion_auth, opportunities as opp_service
 from app.services import submissions as submission_service
 from app.services.legion_auth import safe_next
 from app.services.requirements import resolve_required_hours, season_total_hours
-from app.services.sso import logout_url, make_authorize_url, sso_identity
+from app.services.sso import logout_url, make_authorize_url, sso_identity, stepup_url
 from app.utils import (
     format_date_range, format_shift_range, now_utc, shift_length_hours, utc_to_local,
 )
@@ -45,6 +45,7 @@ templates.env.filters["levellabel"] = level_label
 # Exposed for the "Admin" cross-nav link in portal/base.html (see admin.py's matching
 # "My Dashboard" link) — both apps read the same live mw_sso claims, no bridging route.
 templates.env.globals["session_identity"] = sso_identity
+templates.env.globals["stepup_url"] = stepup_url
 templates.env.globals["legion_base_url"] = lambda: settings.legion_base_url
 
 
