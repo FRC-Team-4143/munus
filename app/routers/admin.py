@@ -489,7 +489,10 @@ async def admin_opportunities_announce(opp_id: int, request: Request, db: AsyncS
     e.g. because SLACK_ANNOUNCE_CHANNEL wasn't set yet at that moment. `update_announcement`
     only keeps an *already-posted* announcement in sync; it never posts the first one,
     so an opportunity that missed its trigger would otherwise be stuck unannounced
-    forever. No-ops if this opportunity already has one (never double-posts)."""
+    forever. No-ops if this opportunity already has one (never double-posts). The button
+    that posts here is hidden in the template unless the opportunity is actually ready
+    (continuous, or shift-based with a shift already on it); this guard covers a direct
+    POST to the same URL for a shift-based opportunity with no shifts yet."""
     if redirect := _require_auth(request):
         return redirect
     opp = (
@@ -504,6 +507,11 @@ async def admin_opportunities_announce(opp_id: int, request: Request, db: AsyncS
     if not settings.slack_announce_channel:
         return RedirectResponse(
             f"/admin/opportunities/{opp_id}/edit?error=Set+a+Slack+announce+channel+in+Admin+%E2%86%92+Settings+first.",
+            status_code=303,
+        )
+    if not opp.is_continuous and not opp.shifts:
+        return RedirectResponse(
+            f"/admin/opportunities/{opp_id}/edit?error=Add+a+shift+first+%E2%80%94+there%27s+nothing+to+sign+up+for+yet.",
             status_code=303,
         )
     ts = await announce_opportunity(db, opp)

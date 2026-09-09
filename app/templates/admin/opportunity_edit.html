@@ -30,7 +30,7 @@
 </div>
 {% endif %}
 
-{% if not opp.announcement_channel_id %}
+{% if not opp.announcement_channel_id and (opp.is_continuous or shifts) %}
 <div class="alert alert-secondary d-flex justify-content-between align-items-center py-2 mb-3">
   <span><i class="bi bi-slack me-1"></i> Not yet announced in Slack — it missed its usual trigger.</span>
   <form method="post" action="/admin/opportunities/{{ opp.id }}/announce" class="mb-0">

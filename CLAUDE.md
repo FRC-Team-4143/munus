@@ -318,11 +318,17 @@ an opportunity that missed its trigger (most commonly: `SLACK_ANNOUNCE_CHANNEL` 
 still blank at the moment it was created, or a shift-based one's first shift) stays
 unannounced forever no matter how many times it's edited afterward. **Admin → an
 opportunity's edit page → "Post announcement now"** (`admin_opportunities_announce` in
-`routers/admin.py`) is the way out: shown only while `announcement_channel_id` is blank,
-it calls `announce_opportunity` directly. No-ops (redirects without posting) if the
-opportunity already has an announcement, or if `SLACK_ANNOUNCE_CHANNEL` is still blank —
-the latter surfaces as an inline error rather than a silent no-op, since an admin
-clicking the button has already decided it should post.
+`routers/admin.py`) is the way out: shown only while `announcement_channel_id` is blank
+**and** the opportunity is actually ready to post — continuous, or shift-based with at
+least one shift already added — so the button stays hidden for a brand-new shift-based
+opportunity that hasn't missed anything yet, it's just waiting on its normal
+first-shift trigger. It calls `announce_opportunity` directly. No-ops (redirects
+without posting) if the opportunity already has an announcement, if `SLACK_ANNOUNCE_
+CHANNEL` is still blank, or if a shift-based opportunity still has no shifts — each
+surfaces as an inline error rather than a silent no-op, since an admin clicking the
+button has already decided it should post (the shift-based-with-no-shifts case is a
+server-side guard, in case the button is ever posted to directly rather than clicked
+while hidden).
 
 **Archiving syncs the announcement too, in both directions.** Manually archiving/
 restoring (`admin_opportunities_archive`) and the auto-archive job
