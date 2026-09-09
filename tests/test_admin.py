@@ -900,6 +900,35 @@ async def test_admin_announce_now_errors_without_channel_configured(client, db, 
         settings.slack_announce_channel = original
 
 
+async def test_admin_announce_now_errors_for_shift_based_opp_with_no_shifts(client, db, make_opportunity, monkeypatch):
+    """The manual button is hidden in the template until a shift-based opportunity has
+    at least one shift — this is the server-side guard for a direct POST to the same
+    URL, e.g. before that shift is ever added."""
+    import app.services.opportunities as opp_module
+    from app.config import settings
+
+    async def fail_if_called(*a, **k):
+        raise AssertionError("post_to_channel should not be called")
+
+    monkeypatch.setattr(opp_module, "post_to_channel", fail_if_called)
+    original = settings.slack_announce_channel
+    settings.slack_announce_channel = "C0ANNOUNCE"
+    try:
+        await _login(client)
+        opp = await make_opportunity(name="Robot Build", is_continuous=False)
+
+        resp = await client.post(
+            f"/admin/opportunities/{opp.id}/announce", follow_redirects=False
+        )
+        assert resp.status_code == 303
+        assert "error=" in resp.headers["location"]
+
+        await db.refresh(opp)
+        assert opp.announcement_channel_id is None
+    finally:
+        settings.slack_announce_channel = original
+
+
 async def test_admin_announce_now_noops_if_already_announced(client, db, make_opportunity, monkeypatch):
     import app.services.opportunities as opp_module
     from app.config import settings
