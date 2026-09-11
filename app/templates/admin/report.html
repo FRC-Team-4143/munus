@@ -82,16 +82,23 @@
 </div>
 {% endif %}
 
-<!-- Filters -->
-<form method="get" class="row g-2 mb-3 align-items-end">
+<!-- Scope selector, not a view filter: unlike the per-column funnel filters (client-side,
+     rows only) this re-queries and also drives the Notify buttons, the CSV export, and the
+     met-requirement totals. -->
+<form method="get" class="row g-2 mb-3">
   <div class="col-auto">
-    <label class="form-label small mb-1">Level</label>
+    <label class="form-label small mb-1">Level Scope</label>
     <select name="level" class="form-select form-select-sm" onchange="this.form.submit()">
       <option value="">All levels</option>
       {% for l in levels %}
       <option value="{{ l.value }}" {% if current_level == l.value %}selected{% endif %}>{{ l | levellabel }}</option>
       {% endfor %}
     </select>
+    <div class="small text-muted mt-1" style="max-width: 24rem;">
+      Also scopes the Notify buttons, CSV export, and the met-requirement counts — not just
+      the rows shown. To only narrow the table, use the <i class="bi bi-funnel"></i> on the
+      Level column.
+    </div>
   </div>
 </form>
 
