@@ -660,6 +660,37 @@ async def test_admin_create_continuous_opportunity_hides_shift_ui(client, db):
     assert "Add Shift" not in edit.text
 
 
+async def test_admin_create_continuous_opportunity_announces_immediately(client, db, monkeypatch):
+    """Creating a continuous opportunity while SLACK_ANNOUNCE_CHANNEL is configured
+    announces it right away (it has no shifts to wait for). This must not crash even
+    though the freshly-created Opportunity's `shifts` relationship was never
+    eager-loaded -- opportunity_announcement_blocks reads opp.shifts synchronously."""
+    import app.services.opportunities as opp_module
+    from app.config import settings
+    from app.models import Opportunity
+
+    async def fake_post_to_channel(channel_id, text, blocks=None, automated=True):
+        return "1700000000.000300"
+
+    monkeypatch.setattr(opp_module, "post_to_channel", fake_post_to_channel)
+    original = settings.slack_announce_channel
+    settings.slack_announce_channel = "C0ANNOUNCE"
+    try:
+        await _login(client)
+        resp = await client.post("/admin/opportunities", data={
+            "name": "FLL Youth Mentor", "is_continuous": "true",
+        }, follow_redirects=False)
+        assert resp.status_code == 303
+
+        opp = (
+            await db.execute(select(Opportunity).where(Opportunity.name == "FLL Youth Mentor"))
+        ).scalars().first()
+        assert opp.announcement_channel_id == "C0ANNOUNCE"
+        assert opp.announcement_ts == "1700000000.000300"
+    finally:
+        settings.slack_announce_channel = original
+
+
 async def test_admin_create_opportunity_defaults_to_shift_based(client, db):
     from app.models import Opportunity
 
