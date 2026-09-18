@@ -388,6 +388,11 @@ async def admin_opportunities_create(
     # A continuous opportunity has no shifts to wait for — announce it right away
     # (mirrors admin_shift_create's "first shift added" trigger for shift-based ones).
     if is_continuous and settings.slack_announce_channel:
+        opp = (
+            await db.execute(
+                select(Opportunity).options(selectinload(Opportunity.shifts)).where(Opportunity.id == opp.id)
+            )
+        ).scalars().first()
         await announce_opportunity(db, opp)
     return RedirectResponse(f"/admin/opportunities/{opp.id}/edit", status_code=303)
 
