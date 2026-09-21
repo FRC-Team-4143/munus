@@ -726,6 +726,29 @@ async def test_admin_edit_opportunity_toggles_is_continuous(client, db, make_opp
     assert opp.is_continuous is False
 
 
+async def test_admin_continuous_opportunity_edit_shows_recorded_sessions(
+    client, db, make_student, make_opportunity
+):
+    from app.models import HourSubmission, SubmissionStatus
+
+    await _login(client)
+    student = await make_student(name="Ada Lovelace", code="ada00001")
+    opp = await make_opportunity(name="CAD Subteam", is_continuous=True)
+    db.add(HourSubmission(
+        student_id=student.id, opportunity_id=opp.id, hours=3.5,
+        report="Designed a bracket", status=SubmissionStatus.approved,
+    ))
+    await db.commit()
+
+    edit = await client.get(f"/admin/opportunities/{opp.id}/edit")
+    assert edit.status_code == 200
+    assert "Recorded Sessions" in edit.text
+    assert "Ada Lovelace" in edit.text
+    assert "3.50" in edit.text
+    assert "Designed a bracket" in edit.text
+    assert "Approved" in edit.text
+
+
 async def test_admin_create_required_opportunity(client, db):
     from app.models import Opportunity
 

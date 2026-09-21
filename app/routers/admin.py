@@ -429,11 +429,28 @@ async def admin_opportunities_edit_get(opp_id: int, request: Request, db: AsyncS
             rosters[su.shift_id].append(su)
     counts = {sid: len(rosters[sid]) for sid in shift_ids}
     all_mentors = (await db.execute(select(Mentor).order_by(Mentor.name))).scalars().all()
+
+    # Recorded sessions — the hours logged directly against a continuous opportunity
+    # (it has no shifts, so this is the only record of who's put in time and when).
+    sessions = []
+    if opp.is_continuous:
+        sessions = (
+            await db.execute(
+                select(HourSubmission)
+                .options(
+                    selectinload(HourSubmission.student),
+                    selectinload(HourSubmission.reviewer),
+                )
+                .where(HourSubmission.opportunity_id == opp_id)
+                .order_by(HourSubmission.submitted_at.desc())
+            )
+        ).scalars().all()
+
     return templates.TemplateResponse(
         "admin/opportunity_edit.html",
         {
             "request": request, "opp": opp, "shifts": shifts, "counts": counts,
-            "rosters": rosters,
+            "rosters": rosters, "sessions": sessions,
             "mentors": [m for m in all_mentors if m.is_active],
             "mentor_names": {m.id: m.name for m in all_mentors},
         },

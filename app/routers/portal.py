@@ -352,10 +352,21 @@ async def opportunity_detail(
         return RedirectResponse("/opportunities", status_code=303)
 
     if opp.is_continuous:
+        # Recorded sessions — the only record of activity on an ongoing opportunity,
+        # since it has no shifts/signups to browse instead.
+        sessions = (
+            await db.execute(
+                select(HourSubmission)
+                .options(selectinload(HourSubmission.student))
+                .where(HourSubmission.opportunity_id == opp_id)
+                .order_by(HourSubmission.submitted_at.desc())
+            )
+        ).scalars().all()
         return templates.TemplateResponse(
             "portal/opportunity.html",
             {"request": request, "student": student, "mentor": mentor, "opp": opp,
-             "shift_rows": None, "message": request.query_params.get("message")},
+             "shift_rows": None, "sessions": sessions,
+             "message": request.query_params.get("message")},
         )
 
     now = now_utc()
