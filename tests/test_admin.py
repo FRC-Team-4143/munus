@@ -1177,6 +1177,29 @@ async def test_admin_report_surfaces_missing_required_opportunity(client, db, ma
     assert 'title="Missing: Bag Night"' in report.text
 
 
+async def test_admin_report_approved_and_projected_carry_ahead_of_requirement_filter_value(
+    client, db, make_student
+):
+    """Approved/Projected are numeric (sortable on the real hours via data-value) but
+    filter as an ahead/not-ahead-of-requirement category via data-filter-value, so the
+    funnel doesn't enumerate every distinct hour total."""
+    from app.models import HourSubmission, StudentLevel, SubmissionStatus
+
+    await _login(client)
+    ahead = await make_student(name="Ahead", code="ah000001", level=StudentLevel.freshman)  # req 5
+    db.add(HourSubmission(student_id=ahead.id, hours=6.0, status=SubmissionStatus.approved))
+    await make_student(name="Behind", code="bh000001", level=StudentLevel.freshman)
+    await db.commit()
+
+    report = await client.get("/admin/report")
+    assert report.status_code == 200
+    text = report.text
+    assert 'data-filter-value="ahead"' in text
+    assert 'data-filter-label="Ahead of requirement"' in text
+    assert 'data-filter-value="not_ahead"' in text
+    assert 'data-filter-label="Not ahead of requirement"' in text
+
+
 async def test_admin_edit_shift_updates_fields(client, db, make_opportunity, make_shift):
     from datetime import datetime
     from app.utils import local_to_utc

@@ -145,8 +145,8 @@
         <tr>
           {{ fs_th('Student', 'student', sortable=true, filterable=false) }}
           {{ fs_th('Level', 'level', sortable=true) }}
-          {{ fs_th('Approved', 'approved', sortable=true, sort_type='num', filterable=false, extra_class='text-end') }}
-          {{ fs_th('Projected', 'projected', sortable=true, sort_type='num', filterable=false, extra_class='text-end') }}
+          {{ fs_th('Approved', 'approved', sortable=true, sort_type='num', extra_class='text-end') }}
+          {{ fs_th('Projected', 'projected', sortable=true, sort_type='num', extra_class='text-end') }}
           {{ fs_th('Required', 'required', sortable=true, sort_type='num', filterable=false, extra_class='text-end') }}
           <th>Progress</th>
           <th class="text-center">Pending</th>
@@ -166,8 +166,14 @@
             {% if not r.student.is_active %}<span class="badge bg-secondary ms-1">Archived</span>{% endif %}
           </td>
           <td class="text-muted" data-value="{{ r.student.level.value if r.student.level else '' }}" data-label="{{ r.student.level | levellabel }}">{{ r.student.level | levellabel }}</td>
-          <td class="text-end fw-semibold" data-value="{{ r.approved }}">{{ '%.2f' % r.approved }}</td>
-          <td class="text-end" data-value="{{ r.projected }}">
+          <td class="text-end fw-semibold" data-value="{{ r.approved }}"
+              data-filter-value="{{ 'ahead' if r.approved > r.required else 'not_ahead' }}"
+              data-filter-label="{{ 'Ahead of requirement' if r.approved > r.required else 'Not ahead of requirement' }}">
+            {{ '%.2f' % r.approved }}
+          </td>
+          <td class="text-end" data-value="{{ r.projected }}"
+              data-filter-value="{{ 'ahead' if r.projected > r.required else 'not_ahead' }}"
+              data-filter-label="{{ 'Ahead of requirement' if r.projected > r.required else 'Not ahead of requirement' }}">
             {{ '%.2f' % r.projected }}{% if r.projected > r.approved %}<i class="bi bi-arrow-up-short text-success"></i>{% endif %}
           </td>
           <td class="text-end text-muted" data-value="{{ r.required }}">{{ '%.2f' % r.required }}</td>

@@ -6,6 +6,13 @@
  * `data-empty-text` on the `<table>` to customize the "no rows match" placeholder
  * shown when filters exclude every row. See CLAUDE.md / the roster/report pages for
  * the full markup contract.
+ *
+ * A column sorts and filters on the same `data-value` by default (e.g. a name, or a
+ * category like "met"/"not_met"). A numeric column that should filter on a derived
+ * category instead of enumerating every distinct number — e.g. "Approved" hours,
+ * sortable numerically but filtered as ahead-of-requirement/not — sets
+ * `data-filter-value`/`data-filter-label` on the `<td>` too; when present these are
+ * used for filtering (funnel + visibility) while `data-value` still drives sorting.
  */
 (function () {
   'use strict';
@@ -25,14 +32,23 @@
     return numeric ? (parseFloat(a) || 0) - (parseFloat(b) || 0) : compareText(a, b);
   }
 
+  // Sort value: always `data-value` — a numeric column needs its real number here.
   function cellValue(td) {
     var v = td ? td.getAttribute('data-value') : null;
     return v === null || v === '' ? NONE_VALUE : v;
   }
 
+  // Filter value: `data-filter-value` when the cell sets one (a derived category),
+  // otherwise falls back to the same `data-value` sorting uses.
+  function cellFilterValue(td) {
+    var v = td ? td.getAttribute('data-filter-value') : null;
+    if (v === null) return cellValue(td);
+    return v === '' ? NONE_VALUE : v;
+  }
+
   function cellLabel(td, value) {
     if (value === NONE_VALUE) return NONE_LABEL;
-    var label = td.getAttribute('data-label');
+    var label = td.getAttribute('data-filter-label') || td.getAttribute('data-label');
     if (label !== null && label !== '') return label;
     return (td.textContent || '').trim();
   }
@@ -128,7 +144,7 @@
     var out = [];
     this.rows().forEach(function (tr) {
       var td = tr.children[col.index];
-      var value = cellValue(td);
+      var value = cellFilterValue(td);
       if (seen.hasOwnProperty(value)) return;
       seen[value] = true;
       out.push({ value: value, label: cellLabel(td, value) });
@@ -318,7 +334,7 @@
       var visible = self.columns.every(function (col) {
         if (!col.selected) return true;
         var td = tr.children[col.index];
-        return col.selected.values.indexOf(cellValue(td)) !== -1;
+        return col.selected.values.indexOf(cellFilterValue(td)) !== -1;
       });
       tr.classList.toggle('d-none', !visible);
       if (visible) visibleCount++;
