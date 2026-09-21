@@ -48,28 +48,24 @@
 {% endblock %}
 
 {% block content %}
-<div class="mb-3">
-  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-    <h2 class="mb-0">Season Progress Report</h2>
-    <div class="d-flex gap-2 flex-wrap">
-      {% if rows %}
-      <form method="post" action="/admin/report/notify" id="notifyForm" class="mb-0">
-        <button type="submit" class="btn btn-sm btn-outline-primary" id="notifyBtn">
-          <i class="bi bi-bell me-1"></i>Notify
-        </button>
-      </form>
-      {% endif %}
-      <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#exportReportModal">
-        <i class="bi bi-download me-1"></i>Export CSV
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <h2 class="mb-0">Season Progress Report</h2>
+  <div class="d-flex align-items-center gap-2 flex-wrap">
+    {% if rows %}
+    <span class="small text-muted">Notify DMs whoever the column filters below currently leave visible.</span>
+    <form method="post" action="/admin/report/notify" id="notifyForm" class="mb-0">
+      <button type="submit" class="btn btn-sm btn-outline-primary" id="notifyBtn">
+        <i class="bi bi-bell me-1"></i>Notify
       </button>
-      <a href="/admin/report/search" class="btn btn-sm btn-link text-muted">
-        <i class="bi bi-search me-1"></i>Search students
-      </a>
-    </div>
+    </form>
+    {% endif %}
+    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#exportReportModal">
+      <i class="bi bi-download me-1"></i>Export CSV
+    </button>
+    <a href="/admin/report/search" class="btn btn-sm btn-link text-muted">
+      <i class="bi bi-search me-1"></i>Search students
+    </a>
   </div>
-  {% if rows %}
-  <div class="small text-muted mt-1">Notify DMs whoever the column filters below currently leave visible.</div>
-  {% endif %}
 </div>
 
 {% if request.query_params.get('notified') is not none %}
