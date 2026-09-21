@@ -430,8 +430,10 @@ async def admin_opportunities_edit_get(opp_id: int, request: Request, db: AsyncS
     counts = {sid: len(rosters[sid]) for sid in shift_ids}
     all_mentors = (await db.execute(select(Mentor).order_by(Mentor.name))).scalars().all()
 
-    # Recorded sessions — the hours logged directly against a continuous opportunity
-    # (it has no shifts, so this is the only record of who's put in time and when).
+    # Recorded sessions — the approved hours logged directly against a continuous
+    # opportunity (it has no shifts, so this is the only record of who's put in time
+    # and when). Pending/rejected submissions don't show here — this is a log of
+    # confirmed work, not a review queue (that's Admin -> Submissions).
     sessions = []
     if opp.is_continuous:
         sessions = (
@@ -441,7 +443,10 @@ async def admin_opportunities_edit_get(opp_id: int, request: Request, db: AsyncS
                     selectinload(HourSubmission.student),
                     selectinload(HourSubmission.reviewer),
                 )
-                .where(HourSubmission.opportunity_id == opp_id)
+                .where(
+                    HourSubmission.opportunity_id == opp_id,
+                    HourSubmission.status == SubmissionStatus.approved,
+                )
                 .order_by(HourSubmission.submitted_at.desc())
             )
         ).scalars().all()

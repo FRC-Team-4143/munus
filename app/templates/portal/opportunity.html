@@ -2,8 +2,6 @@
 {% set active_page = "opportunities" %}
 {% block title %}{{ opp.name }} — Munus{% endblock %}
 
-{% set status_badge = {"pending": "bg-warning text-dark", "approved": "bg-success", "rejected": "bg-danger"} %}
-
 {% block content %}
 <a href="/opportunities" class="text-muted small"><i class="bi bi-arrow-left me-1"></i>All opportunities</a>
 <h2 class="mt-2 mb-3">{{ opp.name }}</h2>
@@ -65,16 +63,13 @@
                 <div>{{ s.student.name if s.student else 'Unknown student' }} <span class="text-muted">— {{ '%.2f' % s.hours }} hrs</span></div>
                 {% if s.report %}<div class="small text-muted">{{ s.report }}</div>{% endif %}
               </div>
-              <div class="flex-shrink-0 text-end">
-                <span class="badge {{ status_badge[s.status.value] }}">{{ s.status.value | capitalize }}</span>
-                <div class="small text-muted mt-1">{{ s.submitted_at | localdt }}</div>
-              </div>
+              <div class="flex-shrink-0 text-end small text-muted">{{ s.submitted_at | localdt }}</div>
             </div>
           </li>
           {% endfor %}
         </ul>
         {% else %}
-        <p class="text-muted p-3 mb-0">No hours have been logged against this opportunity yet.</p>
+        <p class="text-muted p-3 mb-0">No approved hours have been logged against this opportunity yet.</p>
         {% endif %}
       </div>
     </div>

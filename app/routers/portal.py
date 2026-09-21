@@ -352,13 +352,17 @@ async def opportunity_detail(
         return RedirectResponse("/opportunities", status_code=303)
 
     if opp.is_continuous:
-        # Recorded sessions — the only record of activity on an ongoing opportunity,
-        # since it has no shifts/signups to browse instead.
+        # Recorded sessions — the approved hours logged against an ongoing opportunity,
+        # since it has no shifts/signups to browse instead. Pending/rejected submissions
+        # don't show here — this is a log of confirmed work, not a review queue.
         sessions = (
             await db.execute(
                 select(HourSubmission)
                 .options(selectinload(HourSubmission.student))
-                .where(HourSubmission.opportunity_id == opp_id)
+                .where(
+                    HourSubmission.opportunity_id == opp_id,
+                    HourSubmission.status == SubmissionStatus.approved,
+                )
                 .order_by(HourSubmission.submitted_at.desc())
             )
         ).scalars().all()

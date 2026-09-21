@@ -88,26 +88,24 @@
       </div>
     </div>
 
-    {% set status_badge = {"pending": "bg-warning text-dark", "approved": "bg-success", "rejected": "bg-danger"} %}
     <div class="card">
       <div class="card-header"><i class="bi bi-list-check me-1"></i> Recorded Sessions</div>
       <div class="card-body p-0">
         {% if sessions %}
         <div class="table-responsive">
         <table class="table table-hover mb-0 align-middle">
-          <thead class="table-light"><tr><th>Student</th><th>Hours</th><th>Reviewer</th><th>Status</th><th>Logged</th></tr></thead>
+          <thead class="table-light"><tr><th>Student</th><th>Hours</th><th>Reviewer</th><th>Logged</th></tr></thead>
           <tbody>
             {% for s in sessions %}
             <tr>
               <td>{{ s.student.name if s.student else 'Unknown student' }}</td>
               <td><span class="badge bg-secondary">{{ '%.2f' % s.hours }}</span></td>
               <td>{{ s.reviewer.name if s.reviewer else '—' }}</td>
-              <td><span class="badge {{ status_badge[s.status.value] }}">{{ s.status.value | capitalize }}</span></td>
               <td class="text-muted small">{{ s.submitted_at | localdt }}</td>
             </tr>
             {% if s.report %}
             <tr>
-              <td colspan="5" class="pt-0 pb-2 text-muted small">{{ s.report }}</td>
+              <td colspan="4" class="pt-0 pb-2 text-muted small">{{ s.report }}</td>
             </tr>
             {% endif %}
             {% endfor %}
@@ -115,7 +113,7 @@
         </table>
         </div>
         {% else %}
-        <p class="text-muted p-3 mb-0">No hours have been logged against this opportunity yet.</p>
+        <p class="text-muted p-3 mb-0">No approved hours have been logged against this opportunity yet.</p>
         {% endif %}
       </div>
     </div>

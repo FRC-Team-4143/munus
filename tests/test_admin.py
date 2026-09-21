@@ -733,10 +733,15 @@ async def test_admin_continuous_opportunity_edit_shows_recorded_sessions(
 
     await _login(client)
     student = await make_student(name="Ada Lovelace", code="ada00001")
+    other = await make_student(name="Grace Hopper", code="gra00002")
     opp = await make_opportunity(name="CAD Subteam", is_continuous=True)
     db.add(HourSubmission(
         student_id=student.id, opportunity_id=opp.id, hours=3.5,
         report="Designed a bracket", status=SubmissionStatus.approved,
+    ))
+    db.add(HourSubmission(
+        student_id=other.id, opportunity_id=opp.id, hours=2.0,
+        report="Still pending", status=SubmissionStatus.pending,
     ))
     await db.commit()
 
@@ -746,7 +751,9 @@ async def test_admin_continuous_opportunity_edit_shows_recorded_sessions(
     assert "Ada Lovelace" in edit.text
     assert "3.50" in edit.text
     assert "Designed a bracket" in edit.text
-    assert "Approved" in edit.text
+    # Only approved hours show — pending/rejected submissions stay in Admin -> Submissions.
+    assert "Grace Hopper" not in edit.text
+    assert "Still pending" not in edit.text
 
 
 async def test_admin_create_required_opportunity(client, db):
