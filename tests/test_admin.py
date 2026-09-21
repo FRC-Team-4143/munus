@@ -1200,6 +1200,32 @@ async def test_admin_report_approved_and_projected_carry_ahead_of_requirement_fi
     assert 'data-filter-label="Not ahead of requirement"' in text
 
 
+async def test_admin_report_required_opps_carries_complete_missing_filter_value(
+    client, db, make_student, make_opportunity, make_shift
+):
+    """Required Opps stays numerically sortable on the missing count (data-value) but
+    filters as a complete/missing category (data-filter-value), same as Approved/
+    Projected -- a raw count funnel would be a checkbox per distinct count instead of
+    a simple complete-vs-not toggle."""
+    from app.models import Signup, SignupStatus, StudentLevel
+
+    await _login(client)
+    complete = await make_student(name="Complete", code="co000001", level=StudentLevel.freshman)
+    opp = await make_opportunity(name="Bag Night", is_required=True)
+    shift = await make_shift(opp.id, start_in_hours=24)
+    db.add(Signup(shift_id=shift.id, student_id=complete.id, status=SignupStatus.signed_up))
+    await make_student(name="Missing", code="mi000001", level=StudentLevel.freshman)
+    await db.commit()
+
+    report = await client.get("/admin/report")
+    assert report.status_code == 200
+    text = report.text
+    assert 'data-filter-value="complete"' in text
+    assert 'data-filter-label="All required complete"' in text
+    assert 'data-filter-value="missing"' in text
+    assert 'data-filter-label="Missing required opportunities"' in text
+
+
 async def test_admin_edit_shift_updates_fields(client, db, make_opportunity, make_shift):
     from datetime import datetime
     from app.utils import local_to_utc

@@ -151,7 +151,7 @@
           <th>Progress</th>
           <th class="text-center">Pending</th>
           <th class="text-center">Upcoming</th>
-          {{ fs_th('Required Opps', 'reqopps', sortable=true, sort_type='num', filterable=false, extra_class='text-center') }}
+          {{ fs_th('Required Opps', 'reqopps', sortable=true, sort_type='num', extra_class='text-center') }}
           {{ fs_th('Met', 'met', sortable=true, extra_class='text-center') }}
         </tr>
       </thead>
@@ -187,7 +187,9 @@
           </td>
           <td class="text-center">{% if r.pending_count %}<span class="badge bg-warning text-dark">{{ r.pending_count }}</span>{% else %}—{% endif %}</td>
           <td class="text-center">{% if r.upcoming_count %}<span class="badge bg-secondary">{{ r.upcoming_count }}</span>{% else %}—{% endif %}</td>
-          <td class="text-center" data-value="{{ r.missing_required|length }}">
+          <td class="text-center" data-value="{{ r.missing_required|length }}"
+              data-filter-value="{{ 'missing' if r.missing_required else 'complete' }}"
+              data-filter-label="{{ 'Missing required opportunities' if r.missing_required else 'All required complete' }}">
             {% if r.missing_required %}
             <span class="badge bg-danger" title="Missing: {{ r.missing_required|join(', ') }}">{{ r.missing_required|length }} missing</span>
             {% else %}
