@@ -136,8 +136,8 @@
   </div>
   <div class="card-body p-0" style="overflow-x: auto;">
     <table class="table table-hover mb-0 report-table" data-filter-sort data-empty-text="No students match the current filters.">
-      {% macro fs_th(label, col, sortable=false, sort_type='text', filterable=true, extra_class='') %}
-      <th class="fs-th {{ extra_class }}" data-col="{{ col }}"{% if sortable %} data-sortable="true" data-sort-type="{{ sort_type }}"{% endif %}{% if not filterable %} data-filter="none"{% endif %}>
+      {% macro fs_th(label, col, sortable=false, sort_type='text', filterable=true, extra_class='', filter_sort_type=none) %}
+      <th class="fs-th {{ extra_class }}" data-col="{{ col }}"{% if sortable %} data-sortable="true" data-sort-type="{{ sort_type }}"{% endif %}{% if not filterable %} data-filter="none"{% endif %}{% if filter_sort_type %} data-filter-sort-type="{{ filter_sort_type }}"{% endif %}>
         <span class="th-inner d-inline-flex align-items-center"><span class="th-label">{{ label }}</span></span>
       </th>
       {% endmacro %}
@@ -151,7 +151,10 @@
           <th>Progress</th>
           <th class="text-center">Pending</th>
           <th class="text-center">Upcoming</th>
-          {{ fs_th('Required Opps', 'reqopps', sortable=true, sort_type='num', extra_class='text-center') }}
+          {# The funnel lists distinct required-opportunity names, so it sorts itself
+             alphabetically (filter_sort_type) even though the column's own row sort
+             (sort_type) is numeric, by missing count. #}
+          {{ fs_th('Required Opps', 'reqopps', sortable=true, sort_type='num', filter_sort_type='text', extra_class='text-center') }}
           {{ fs_th('Met', 'met', sortable=true, extra_class='text-center') }}
         </tr>
       </thead>
@@ -188,8 +191,7 @@
           <td class="text-center">{% if r.pending_count %}<span class="badge bg-warning text-dark">{{ r.pending_count }}</span>{% else %}—{% endif %}</td>
           <td class="text-center">{% if r.upcoming_count %}<span class="badge bg-secondary">{{ r.upcoming_count }}</span>{% else %}—{% endif %}</td>
           <td class="text-center" data-value="{{ r.missing_required|length }}"
-              data-filter-value="{{ 'missing' if r.missing_required else 'complete' }}"
-              data-filter-label="{{ 'Missing required opportunities' if r.missing_required else 'All required complete' }}">
+              data-filter-values="{{ r.missing_required|join(', ') }}">
             {% if r.missing_required %}
             <span class="badge bg-danger" title="Missing: {{ r.missing_required|join(', ') }}">{{ r.missing_required|length }} missing</span>
             {% else %}
