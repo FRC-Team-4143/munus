@@ -79,14 +79,16 @@ async def test_student_vhours_message(db, make_student, make_opportunity, make_s
     db.add(Signup(shift_id=shift.id, student_id=student.id, status=SignupStatus.signed_up))
     await db.commit()
 
-    msg = await student_vhours_message(db, student)
-    assert "Your Volunteer Hours" in msg
-    assert "Season total:" in msg
-    assert "Park Cleanup" in msg        # the upcoming shift is listed
+    text, blocks = await student_vhours_message(db, student)
+    assert "Your Volunteer Hours" in text
+    assert "Season total:" in text
+    assert "Park Cleanup" in text        # the upcoming shift is listed
     # One-tap dashboard link: a signed magic link, so it works on the first tap even in
     # Slack's in-app browser where no mw_sso cookie survives between opens.
-    payloads = magic_link_payloads(msg)
+    payloads = magic_link_payloads(text)
     assert any(p["member_code"] == student.member_code for p in payloads)
+    # No opportunities to nudge here -> no section carries a Sign up/Log hours accessory.
+    assert not any(b.get("accessory") for b in blocks)
 
 
 async def test_student_vhours_message_lists_available_opportunities_when_short(
@@ -108,9 +110,9 @@ async def test_student_vhours_message_lists_available_opportunities_when_short(
     continuous_opp = await make_opportunity(name="Shop Cleanup", is_continuous=True)
     await db.commit()
 
-    msg = await student_vhours_message(db, student)
-    assert "Opportunities you could sign up for:" in msg
-    available_section = msg.split("Opportunities you could sign up for:")[1]
+    text, blocks = await student_vhours_message(db, student)
+    assert "Opportunities you could sign up for:" in text
+    available_section = text.split("Opportunities you could sign up for:")[1]
     assert "Robotics Demo" in available_section
     assert "Shop Cleanup" in available_section
     assert "Ongoing" in available_section  # continuous opportunity has no shift date
@@ -118,8 +120,25 @@ async def test_student_vhours_message_lists_available_opportunities_when_short(
     assert any(
         p["member_code"] == student.member_code
         and p["return_to"].endswith(f"/opportunities/{open_opp.id}")
-        for p in magic_link_payloads(msg)
+        for p in magic_link_payloads(text)
     )
+
+    # Each suggested opportunity is its own section, with an inline Sign up/Log hours
+    # button (the same opportunity_view action the channel announcement's button uses)
+    # as that section's accessory -- not a trailing row of buttons at the end.
+    accessory_blocks = {
+        b["text"]["text"]: b["accessory"] for b in blocks if b.get("accessory")
+    }
+    robotics_block = next(t for t in accessory_blocks if "Robotics Demo" in t)
+    assert accessory_blocks[robotics_block]["action_id"] == "opportunity_view"
+    assert accessory_blocks[robotics_block]["value"] == str(open_opp.id)
+    assert accessory_blocks[robotics_block]["text"]["text"] == "🙋 Sign up"
+
+    shop_block = next(t for t in accessory_blocks if "Shop Cleanup" in t)
+    assert accessory_blocks[shop_block]["value"] == str(continuous_opp.id)
+    assert accessory_blocks[shop_block]["text"]["text"] == "📝 Log hours"
+
+    assert not any("Already Signed Up" in t for t in accessory_blocks)
 
 
 async def test_student_vhours_message_omits_available_opportunities_when_met(
@@ -131,8 +150,9 @@ async def test_student_vhours_message_omits_available_opportunities_when_met(
     db.add(HourSubmission(student_id=student.id, hours=6.0, status=SubmissionStatus.approved))
     await db.commit()
 
-    msg = await student_vhours_message(db, student)
-    assert "Opportunities you could sign up for:" not in msg
+    text, blocks = await student_vhours_message(db, student)
+    assert "Opportunities you could sign up for:" not in text
+    assert not any(b.get("accessory") for b in blocks)
 
 
 async def test_report_met_when_requirement_reached(db, make_student):

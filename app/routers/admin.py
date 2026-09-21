@@ -1643,8 +1643,8 @@ async def admin_report_notify(
     for student in students:
         if not student.slack_user_id:
             continue
-        text = await student_vhours_message(db, student)
-        await send_dm(student.slack_user_id, text)
+        text, blocks = await student_vhours_message(db, student)
+        await send_dm(student.slack_user_id, text, blocks=blocks)
         sent += 1
 
     await audit.record(
