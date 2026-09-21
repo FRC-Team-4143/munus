@@ -460,9 +460,12 @@ async def test_admin_sidebar_hides_legion_link_when_unconfigured(client):
         settings.legion_base_url = original
 
 
-async def test_report_notify_dms_slack_linked_students(
+async def test_report_notify_dms_posted_student_ids(
     client, db, monkeypatch, make_student, make_opportunity, make_shift
 ):
+    """The Notify button has no server-side scoping of its own — it posts whichever
+    student ids the browser gathered from the table's currently-visible rows, and the
+    route just DMs whichever of those have a linked Slack account."""
     import app.routers.admin as adminmod
     from app.models import Signup, SignupStatus
 
@@ -476,13 +479,17 @@ async def test_report_notify_dms_slack_linked_students(
 
     await _login(client)
     linked = await make_student(code="rn000001", slack="U0STU")
-    await make_student(code="rn000002")  # no Slack ID -> skipped
+    unlinked = await make_student(code="rn000002")  # no Slack ID -> skipped
     opp = await make_opportunity(name="Beach Cleanup")
     shift = await make_shift(opp.id, start_in_hours=24)
     db.add(Signup(shift_id=shift.id, student_id=linked.id, status=SignupStatus.signed_up))
     await db.commit()
 
-    resp = await client.post("/admin/report/notify", follow_redirects=False)
+    resp = await client.post(
+        "/admin/report/notify",
+        data={"student_id": [linked.id, unlinked.id]},
+        follow_redirects=False,
+    )
     assert resp.status_code == 303
     assert "notified=1" in resp.headers["location"]
     # Only the Slack-linked student is DMed, with the /vhours summary content.
@@ -491,11 +498,12 @@ async def test_report_notify_dms_slack_linked_students(
     assert "Beach Cleanup" in calls[0][1]
 
 
-async def test_report_notify_incomplete_only_dms_students_behind(
+async def test_report_notify_only_dms_posted_ids_not_whole_roster(
     client, db, monkeypatch, make_student
 ):
+    """Posting a subset of ids (what the JS gathers from a filtered table) only DMs
+    that subset, even with other Slack-linked students on the roster."""
     import app.routers.admin as adminmod
-    from app.models import HourSubmission, StudentLevel, SubmissionStatus
 
     calls = []
 
@@ -506,19 +514,35 @@ async def test_report_notify_incomplete_only_dms_students_behind(
     monkeypatch.setattr(adminmod, "send_dm", fake_send_dm)
 
     await _login(client)
-    on_track = await make_student(
-        name="OnTrack", code="ot000001", slack="U0MET", level=StudentLevel.freshman  # req 5
-    )
-    db.add(HourSubmission(student_id=on_track.id, hours=6.0, status=SubmissionStatus.approved))
-    await make_student(
-        name="Behind", code="bh000001", slack="U0BEHIND", level=StudentLevel.freshman
-    )
-    await db.commit()
+    selected = await make_student(name="Selected", code="se000001", slack="U0SEL")
+    await make_student(name="NotSelected", code="ns000001", slack="U0NOTSEL")
 
-    resp = await client.post("/admin/report/notify?incomplete=1", follow_redirects=False)
+    resp = await client.post(
+        "/admin/report/notify", data={"student_id": [selected.id]}, follow_redirects=False
+    )
     assert resp.status_code == 303
     assert "notified=1" in resp.headers["location"]
-    assert calls == ["U0BEHIND"]
+    assert calls == ["U0SEL"]
+
+
+async def test_report_notify_with_no_ids_sends_nothing(client, db, monkeypatch, make_student):
+    import app.routers.admin as adminmod
+
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None):
+        calls.append(uid)
+        return "ts"
+
+    monkeypatch.setattr(adminmod, "send_dm", fake_send_dm)
+
+    await _login(client)
+    await make_student(slack="U0X")
+
+    resp = await client.post("/admin/report/notify", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/admin/report"
+    assert calls == []
 
 
 async def test_admin_report_export_csv(client):

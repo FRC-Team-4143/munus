@@ -8,7 +8,7 @@ import os
 import re
 import tempfile
 from datetime import date, datetime, time
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -1422,13 +1422,11 @@ def _parse_level(level: Optional[str]) -> Optional[StudentLevel]:
 @router.get("/report", response_class=HTMLResponse)
 async def admin_report(
     request: Request,
-    level: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     if redirect := _require_auth(request):
         return redirect
-    level_filter = _parse_level(level)
-    rows = await student_progress_report(db, level=level_filter)
+    rows = await student_progress_report(db)
     met = sum(1 for r in rows if r["met"])
     required_opportunity_names = [
         o.name for o in await season_required_opportunities(db, await season_start_utc(db))
@@ -1440,7 +1438,6 @@ async def admin_report(
             "request": request,
             "rows": rows,
             "levels": list(StudentLevel),
-            "current_level": level_filter.value if level_filter else "",
             "met_count": met,
             "required_opportunity_names": required_opportunity_names,
             "season_start": season_start,
@@ -1626,38 +1623,36 @@ async def admin_report_search(
 @router.post("/report/notify")
 async def admin_report_notify(
     request: Request,
-    level: Optional[str] = None,
-    incomplete: bool = False,
+    student_id: List[int] = Form([]),
     db: AsyncSession = Depends(get_db),
 ):
-    """DM Slack-linked students the same summary `/vhours` shows them — every active
-    student matching the report's level filter, or (when `incomplete` is set, the
-    Report screen's "Notify students behind" button) only those who haven't yet met
-    their season requirement."""
+    """DM Slack-linked students the same summary `/vhours` shows them, for exactly the
+    students the Report screen's "Notify visible students" button posted. The button has
+    no scoping logic of its own — it reads whichever rows the table's column filters
+    currently leave visible and posts their ids, so this route just trusts the list."""
     if redirect := _require_auth(request):
         return redirect
-    level_filter = _parse_level(level)
-    rows = await student_progress_report(db, level=level_filter)
-    students = [
-        r["student"] for r in rows
-        if r["student"].slack_user_id and (not incomplete or not r["met"])
-    ]
+    if not student_id:
+        return RedirectResponse("/admin/report", status_code=303)
+
+    students = (
+        await db.execute(select(Student).where(Student.id.in_(student_id)))
+    ).scalars().all()
 
     sent = 0
     for student in students:
+        if not student.slack_user_id:
+            continue
         text = await student_vhours_message(db, student)
         await send_dm(student.slack_user_id, text)
         sent += 1
 
-    summary = f"DMed {sent} student(s) their volunteer-hours summary"
-    if incomplete:
-        summary += " (not yet meeting their requirement)"
-    await audit.record(db, request, "report.notify", summary, entity_type="report")
+    await audit.record(
+        db, request, "report.notify",
+        f"DMed {sent} student(s) their volunteer-hours summary", entity_type="report",
+    )
     await db.commit()
-    qs = f"notified={sent}"
-    if level:
-        qs += f"&level={level}"
-    return RedirectResponse(f"/admin/report?{qs}", status_code=303)
+    return RedirectResponse(f"/admin/report?notified={sent}", status_code=303)
 
 
 @router.get("/report/export")

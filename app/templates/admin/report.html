@@ -50,18 +50,11 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
   <h2 class="mb-0">Season Progress Report</h2>
-  {% set qs = "" %}
-  {% if current_level %}{% set qs = qs ~ "&level=" ~ current_level %}{% endif %}
   <div class="d-flex gap-2 flex-wrap">
-    <form method="post" action="/admin/report/notify?{{ qs[1:] }}"
-          onsubmit="return confirm('DM every student with a linked Slack their volunteer-hours summary?')">
-      <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-bell me-1"></i>Notify students</button>
-    </form>
     {% if rows %}
-    <form method="post" action="/admin/report/notify?{{ (qs ~ '&incomplete=1')[1:] }}"
-          onsubmit="return confirm('DM students who haven\'t yet met their season requirement their volunteer-hours summary?')">
-      <button type="submit" class="btn btn-sm btn-outline-warning">
-        <i class="bi bi-bell-fill me-1"></i>Notify students behind ({{ rows|length - met_count }})
+    <form method="post" action="/admin/report/notify" id="notifyForm">
+      <button type="submit" class="btn btn-sm btn-outline-primary" id="notifyBtn">
+        <i class="bi bi-bell me-1"></i>Notify visible students
       </button>
     </form>
     {% endif %}
@@ -82,26 +75,6 @@
 </div>
 {% endif %}
 
-<!-- Scope selector, not a view filter: unlike the per-column funnel filters (client-side,
-     rows only) this re-queries and also drives the Notify buttons, the CSV export, and the
-     met-requirement totals. -->
-<form method="get" class="row g-2 mb-3">
-  <div class="col-auto">
-    <label class="form-label small mb-1">Level Scope</label>
-    <select name="level" class="form-select form-select-sm" onchange="this.form.submit()">
-      <option value="">All levels</option>
-      {% for l in levels %}
-      <option value="{{ l.value }}" {% if current_level == l.value %}selected{% endif %}>{{ l | levellabel }}</option>
-      {% endfor %}
-    </select>
-    <div class="small text-muted mt-1" style="max-width: 24rem;">
-      Also scopes the Notify buttons, CSV export, and the met-requirement counts — not just
-      the rows shown. To only narrow the table, use the <i class="bi bi-funnel"></i> on the
-      Level column.
-    </div>
-  </div>
-</form>
-
 <div class="modal fade" id="exportReportModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog">
     <div class="modal-content">
@@ -115,7 +88,15 @@
             One row per submission, grouped by student, with an approved hours total
             after each student. Leave dates blank for all time.
           </p>
-          {% if current_level %}<input type="hidden" name="level" value="{{ current_level }}">{% endif %}
+          <div class="mb-3">
+            <label class="form-label small mb-1">Level</label>
+            <select name="level" class="form-select form-select-sm">
+              <option value="">All levels</option>
+              {% for l in levels %}
+              <option value="{{ l.value }}">{{ l | levellabel }}</option>
+              {% endfor %}
+            </select>
+          </div>
           <div class="row g-2">
             <div class="col-auto">
               <label class="form-label small mb-1">From</label>
@@ -242,6 +223,42 @@
 
 <script>
   (function () {
+    // The notify button has no filtering logic of its own — it reads whichever rows the
+    // table's own column filters (table-filter-sort.js, which just toggles a `d-none`
+    // class) currently leave visible, and posts their student ids. Narrowing to a level,
+    // a not-met status, a name, etc. via the column funnels is what scopes who gets DMed.
+    var notifyForm = document.getElementById('notifyForm');
+    if (notifyForm) {
+      notifyForm.addEventListener('submit', function (e) {
+        var table = document.querySelector('table[data-filter-sort]');
+        var ids = [];
+        if (table) {
+          Array.prototype.slice.call(table.querySelectorAll('tbody > tr')).forEach(function (tr) {
+            if (tr.classList.contains('d-none')) return;
+            if (tr.querySelector(':scope > td[colspan]')) return; // empty-filter placeholder row
+            var nameBtn = tr.querySelector('[data-student-id]');
+            if (nameBtn) ids.push(nameBtn.getAttribute('data-student-id'));
+          });
+        }
+        if (!ids.length) {
+          e.preventDefault();
+          alert('No students are currently visible in the table.');
+          return;
+        }
+        if (!confirm('DM ' + ids.length + ' visible student(s) with a linked Slack their volunteer-hours summary?')) {
+          e.preventDefault();
+          return;
+        }
+        ids.forEach(function (id) {
+          var input = document.createElement('input');
+          input.type = 'hidden';
+          input.name = 'student_id';
+          input.value = id;
+          notifyForm.appendChild(input);
+        });
+      });
+    }
+
     var LOADING_HTML = '<div class="text-muted text-center py-4"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>';
     var modalEl = document.getElementById('studentSubsModal');
     var titleEl = document.getElementById('studentSubsModalLabel');
