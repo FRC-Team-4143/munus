@@ -1192,6 +1192,16 @@ async def test_admin_report_student_header_carries_live_count_attribute(
     assert 'data-show-count="true"' in report.text
 
 
+async def test_admin_roster_name_header_carries_live_count_attribute(client, db, make_student):
+    await _login(client)
+    await make_student(name="Ada Lovelace")
+
+    roster = await client.get("/admin/roster")
+    assert roster.status_code == 200
+    assert 'data-col="name"' in roster.text
+    assert 'data-show-count="true"' in roster.text
+
+
 async def test_admin_report_approved_and_projected_carry_ahead_of_requirement_filter_value(
     client, db, make_student
 ):
