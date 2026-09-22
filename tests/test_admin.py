@@ -1177,6 +1177,31 @@ async def test_admin_report_surfaces_missing_required_opportunity(client, db, ma
     assert 'title="Missing: Bag Night"' in report.text
 
 
+async def test_admin_report_student_header_carries_live_count_attribute(
+    client, db, make_student
+):
+    """The Student header's "(N)" (updated client-side by table-filter-sort.js as
+    column filters are applied, like Legion's members table) needs data-show-count on
+    the <th> to render at all -- this locks in that markup contract."""
+    await _login(client)
+    await make_student(name="Ada Lovelace")
+
+    report = await client.get("/admin/report")
+    assert report.status_code == 200
+    assert 'data-col="student"' in report.text
+    assert 'data-show-count="true"' in report.text
+
+
+async def test_admin_roster_name_header_carries_live_count_attribute(client, db, make_student):
+    await _login(client)
+    await make_student(name="Ada Lovelace")
+
+    roster = await client.get("/admin/roster")
+    assert roster.status_code == 200
+    assert 'data-col="name"' in roster.text
+    assert 'data-show-count="true"' in roster.text
+
+
 async def test_admin_report_approved_and_projected_carry_ahead_of_requirement_filter_value(
     client, db, make_student
 ):
@@ -1204,7 +1229,8 @@ async def test_admin_report_required_opps_carries_named_filter_values(
     client, db, make_student, make_opportunity, make_shift
 ):
     """Required Opps stays numerically sortable on the missing count (data-value) but
-    filters on the actual missing opportunity name(s) (data-filter-values), so the
+    filters on the *completed* opportunity name(s) (data-filter-values) -- checking a
+    name in the funnel shows students who've done it, not who's missing it -- so the
     funnel lets an admin pick a specific required opportunity rather than a generic
     complete-vs-not toggle."""
     from app.models import Signup, SignupStatus, StudentLevel
@@ -1223,10 +1249,12 @@ async def test_admin_report_required_opps_carries_named_filter_values(
     report = await client.get("/admin/report")
     assert report.status_code == 200
     text = report.text
-    # Complete: neither required opportunity missing -> an empty filter-values list.
-    assert 'data-filter-values=""' in text
-    # Missing: both named opportunities present so either can be picked individually.
+    # Complete: signed up for both -> both named opportunities in its filter-values,
+    # so checking either one in the funnel surfaces this student.
     assert 'data-filter-values="Bag Night, Food Drive"' in text
+    # Missing: signed up for neither -> an empty filter-values list, so it only shows
+    # up under the funnel's "(none)" option, never under a specific opportunity name.
+    assert 'data-filter-values=""' in text
 
 
 async def test_admin_edit_shift_updates_fields(client, db, make_opportunity, make_shift):

@@ -14,6 +14,7 @@
      apart from the solid green "approved" hours. */
   .progress-bar.bar-projected { background-color: #7b6cf6; }
   .fs-th .th-inner { gap: .35rem; }
+  .fs-count { color: #9a7878; font-weight: normal; }
   .sort-icon { font-size: .75rem; cursor: pointer; }
   .card-body { min-height: 360px; }
   .filter-funnel-btn {
@@ -136,14 +137,16 @@
   </div>
   <div class="card-body p-0" style="overflow-x: auto;">
     <table class="table table-hover mb-0 report-table" data-filter-sort data-empty-text="No students match the current filters.">
-      {% macro fs_th(label, col, sortable=false, sort_type='text', filterable=true, extra_class='', filter_sort_type=none) %}
-      <th class="fs-th {{ extra_class }}" data-col="{{ col }}"{% if sortable %} data-sortable="true" data-sort-type="{{ sort_type }}"{% endif %}{% if not filterable %} data-filter="none"{% endif %}{% if filter_sort_type %} data-filter-sort-type="{{ filter_sort_type }}"{% endif %}>
+      {% macro fs_th(label, col, sortable=false, sort_type='text', filterable=true, extra_class='', filter_sort_type=none, show_count=false) %}
+      <th class="fs-th {{ extra_class }}" data-col="{{ col }}"{% if sortable %} data-sortable="true" data-sort-type="{{ sort_type }}"{% endif %}{% if not filterable %} data-filter="none"{% endif %}{% if filter_sort_type %} data-filter-sort-type="{{ filter_sort_type }}"{% endif %}{% if show_count %} data-show-count="true"{% endif %}>
         <span class="th-inner d-inline-flex align-items-center"><span class="th-label">{{ label }}</span></span>
       </th>
       {% endmacro %}
       <thead class="table-light">
         <tr>
-          {{ fs_th('Student', 'student', sortable=true, filterable=false) }}
+          {# show_count: a live "(N)" after the label, how many students the current
+             column filters leave visible -- same idea as Legion's members table. #}
+          {{ fs_th('Student', 'student', sortable=true, filterable=false, show_count=true) }}
           {{ fs_th('Level', 'level', sortable=true) }}
           {{ fs_th('Approved', 'approved', sortable=true, sort_type='num', extra_class='text-end') }}
           {{ fs_th('Projected', 'projected', sortable=true, sort_type='num', extra_class='text-end') }}
@@ -190,8 +193,11 @@
           </td>
           <td class="text-center">{% if r.pending_count %}<span class="badge bg-warning text-dark">{{ r.pending_count }}</span>{% else %}—{% endif %}</td>
           <td class="text-center">{% if r.upcoming_count %}<span class="badge bg-secondary">{{ r.upcoming_count }}</span>{% else %}—{% endif %}</td>
+          {# Filters on completed_required, not missing_required: checking an opportunity
+             name in the funnel shows students who HAVE done it, not who's missing it —
+             the cell itself still displays/sorts by the missing count. #}
           <td class="text-center" data-value="{{ r.missing_required|length }}"
-              data-filter-values="{{ r.missing_required|join(', ') }}">
+              data-filter-values="{{ r.completed_required|join(', ') }}">
             {% if r.missing_required %}
             <span class="badge bg-danger" title="Missing: {{ r.missing_required|join(', ') }}">{{ r.missing_required|length }} missing</span>
             {% else %}

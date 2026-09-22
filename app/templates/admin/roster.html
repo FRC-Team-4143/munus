@@ -6,6 +6,7 @@
 <style>
   .fs-th { white-space: nowrap; }
   .fs-th .th-inner { gap: .35rem; }
+  .fs-count { color: #9a7878; font-weight: normal; }
   .sort-icon { font-size: .75rem; cursor: pointer; }
   .table-responsive { min-height: 360px; }
   .filter-funnel-btn {
@@ -77,7 +78,7 @@
     <table class="table table-hover mb-0 align-middle" data-filter-sort data-empty-text="No members match the current filters.">
       <thead class="table-light">
         <tr>
-        <th class="fs-th" data-col="name" data-sortable="true" data-sort-type="text" data-filter="none">
+        <th class="fs-th" data-col="name" data-sortable="true" data-sort-type="text" data-filter="none" data-show-count="true">
           <span class="th-inner d-inline-flex align-items-center"><span class="th-label">Name</span></span>
         </th>
         <th class="fs-th" data-col="role">
