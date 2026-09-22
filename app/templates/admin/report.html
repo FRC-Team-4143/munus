@@ -193,8 +193,11 @@
           </td>
           <td class="text-center">{% if r.pending_count %}<span class="badge bg-warning text-dark">{{ r.pending_count }}</span>{% else %}—{% endif %}</td>
           <td class="text-center">{% if r.upcoming_count %}<span class="badge bg-secondary">{{ r.upcoming_count }}</span>{% else %}—{% endif %}</td>
+          {# Filters on completed_required, not missing_required: checking an opportunity
+             name in the funnel shows students who HAVE done it, not who's missing it —
+             the cell itself still displays/sorts by the missing count. #}
           <td class="text-center" data-value="{{ r.missing_required|length }}"
-              data-filter-values="{{ r.missing_required|join(', ') }}">
+              data-filter-values="{{ r.completed_required|join(', ') }}">
             {% if r.missing_required %}
             <span class="badge bg-danger" title="Missing: {{ r.missing_required|join(', ') }}">{{ r.missing_required|length }} missing</span>
             {% else %}

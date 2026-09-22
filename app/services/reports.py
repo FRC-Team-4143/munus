@@ -115,18 +115,20 @@ async def student_progress_report(
 ) -> list[dict]:
     """One dict per student (sorted by name):
       {student, approved, projected, required, remaining, pct, pending_count,
-       upcoming_count, met, missing_required}
+       upcoming_count, met, missing_required, completed_required}
 
     `projected` is a forward-looking estimate that stays stable across a shift's lifecycle:
     approved hours + pending submissions (at their submitted value) + the scheduled length
     of any signed-up shift not yet logged. A shift keeps counting until it is approved
     (counted at its real hours) or rejected (dropped).
 
-    `missing_required` is the list of names of required, shift-based opportunities
-    (services.requirements.season_required_opportunities) the student hasn't signed up
-    for a qualifying shift of — see that function's docstring for the season-cutoff
-    rules that keep a new student from being dinged for a required opportunity that
-    predates them.
+    `missing_required` and `completed_required` are complementary lists of names of
+    required, shift-based opportunities (services.requirements.season_required_opportunities)
+    the student hasn't / has signed up for a qualifying shift of — see that function's
+    docstring for the season-cutoff rules that keep a new student from being dinged for a
+    required opportunity that predates them. The report template filters the Required Opps
+    column on `completed_required` (checking a name shows students who've *done* it) while
+    still displaying/sorting the cell on the missing count — see report.html.
     """
     student_q = select(Student).where(Student.is_active.is_(True)).order_by(Student.name)
     if level is not None:
@@ -217,6 +219,7 @@ async def student_progress_report(
     # and its fulfillment must be scoped to the same season.
     required_opps = await season_required_opportunities(db, since)
     missing_required: dict[int, list[str]] = {sid: [] for sid in student_ids}
+    completed_required: dict[int, list[str]] = {sid: [] for sid in student_ids}
     if required_opps:
         opp_ids = [o.id for o in required_opps]
         opp_names_by_id = {o.id: o.name for o in required_opps}
@@ -239,6 +242,9 @@ async def student_progress_report(
             missing_required[sid] = [
                 opp_names_by_id[oid] for oid in opp_ids if oid not in have
             ]
+            completed_required[sid] = [
+                opp_names_by_id[oid] for oid in opp_ids if oid in have
+            ]
 
     rows = []
     for s in students:
@@ -259,6 +265,7 @@ async def student_progress_report(
             "upcoming_count": upcoming_count.get(s.id, 0),
             "met": approved >= required,
             "missing_required": missing_required.get(s.id, []),
+            "completed_required": completed_required.get(s.id, []),
         })
     return rows
 
