@@ -21,8 +21,8 @@ from app.services.app_settings import season_start_utc
 from app.services.legion_auth import make_link_url
 from app.services.opportunities import available_opportunities_for_student, upcoming_signups_for_student
 from app.services.requirements import (
-    level_requirements_map, resolve_required_hours, season_required_opportunities,
-    season_total_hours,
+    level_requirements_map, missing_required_opportunities_for_student,
+    resolve_required_hours, season_required_opportunities, season_total_hours,
 )
 from app.utils import format_shift_range, local_to_utc, now_utc, shift_length_hours
 
@@ -264,21 +264,23 @@ async def student_progress_report(
 
 
 async def student_vhours_message(db: AsyncSession, student: Student) -> tuple[str, list[dict]]:
-    """The `/vhours` reply — season progress, projected total, upcoming shifts, a few
-    opportunities to sign up for, and a one-tap dashboard link. Shared by the Slack slash
-    command and the admin 'Notify students' action so both stay identical.
+    """The `/vhours` reply — season progress, projected total, missing required
+    opportunities, upcoming shifts, a few opportunities to sign up for, and a one-tap
+    dashboard link. Shared by the Slack slash command and the admin 'Notify students'
+    action so both stay identical.
 
     Returns `(text, blocks)`: `text` is the full mrkdwn summary as a single string (Slack's
     notification-preview / fallback-client copy — send it as `chat.postMessage`'s `text`
     alongside `blocks`, never in place of it). `blocks` is what actually renders: each
-    suggested opportunity gets its own `section` with a **Sign up** button as that
-    section's `accessory`, reusing the same `opportunity_view` action id (and
-    `_handle_opportunity_view` handler in routers/slack.py) the channel announcement's
-    button already opens — so the button lands in the identical shift-signup /
-    log-hours modal a student would get from there. A `section` block only ever takes one
-    accessory, which is why suggestions can't share a block the way the plain-text bullet
-    list does; each one is its own block instead, button glued to the line it's for
-    (rather than a trailing row of buttons a reader has to match back to a name above).
+    suggested opportunity (required or not) gets its own `section` with a **Sign up**
+    button as that section's `accessory`, reusing the same `opportunity_view` action id
+    (and `_handle_opportunity_view` handler in routers/slack.py) the channel
+    announcement's button already opens — so the button lands in the identical
+    shift-signup / log-hours modal a student would get from there. A `section` block only
+    ever takes one accessory, which is why suggestions can't share a block the way the
+    plain-text bullet list does; each one is its own block instead, button glued to the
+    line it's for (rather than a trailing row of buttons a reader has to match back to a
+    name above).
     """
     total = await season_total_hours(db, student.id)
     required = await resolve_required_hours(db, student.level)
@@ -306,6 +308,33 @@ async def student_vhours_message(db: AsyncSession, student: Student) -> tuple[st
     text = summary
     blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": summary}}]
 
+    # Required-opportunity completion is independent of hours — a student can be fully
+    # on-track for hours and still owe a required signup, so this shows regardless of
+    # `on_track`. Placed right after the headline (ahead of upcoming shifts / general
+    # nudges) since it's the most actionable thing in the message, not just a status
+    # check. `season_required_opportunities` is always shift-based, so every entry here
+    # gets a "Sign up" button (never "Log hours" — a continuous opportunity can't be
+    # required, enforced in routers/admin.py).
+    missing_required = await missing_required_opportunities_for_student(db, student.id)
+    if missing_required:
+        required_text = "🚨 *Required — you haven't signed up for:*"
+        text += f"\n\n{required_text}"
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": required_text}})
+        for opp in missing_required:
+            opp_url = make_link_url(student.member_code, f"/opportunities/{opp.id}")
+            text += f"\n• <{opp_url}|{opp.name}>"
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*{opp.name}*"},
+                "accessory": {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "🙋 Sign up", "emoji": True},
+                    "style": "danger",
+                    "action_id": "opportunity_view",
+                    "value": str(opp.id),
+                },
+            })
+
     if upcoming:
         upcoming_text = "*Upcoming shifts:*"
         for su in upcoming:
@@ -316,8 +345,12 @@ async def student_vhours_message(db: AsyncSession, student: Student) -> tuple[st
 
     # Still short even counting upcoming shifts — point them at a few more opportunities
     # they could sign up for, so the DM doubles as a nudge rather than just a status check.
+    # Excludes anything already flagged above as a missing *required* opportunity — no
+    # point nudging twice for the same signup with two different buttons.
     if projected < required:
-        available = await available_opportunities_for_student(db, student.id, limit=3)
+        available = await available_opportunities_for_student(
+            db, student.id, limit=3, exclude_ids={opp.id for opp in missing_required}
+        )
         if available:
             text += "\n\n*Opportunities you could sign up for:*"
             blocks.append({

@@ -34,13 +34,16 @@ async def upcoming_signups_for_student(db: AsyncSession, student_id: int) -> lis
 
 
 async def available_opportunities_for_student(
-    db: AsyncSession, student_id: int, limit: int = 3
+    db: AsyncSession, student_id: int, limit: int = 3, exclude_ids: Optional[set[int]] = None
 ) -> list[dict]:
     """A few active opportunities the student could sign up for next: not already
-    signed up for, and either continuous (always open) or with at least one shift that
-    hasn't ended yet. Soonest upcoming shift first, continuous opportunities last (they
-    have no date to sort by). Used to nudge a student who's still short of their season
-    requirement even after their upcoming shifts (`reports.student_vhours_message`).
+    signed up for, not in `exclude_ids` (e.g. ones already surfaced elsewhere in the
+    same message — `reports.student_vhours_message` passes its missing-required list so
+    a required opportunity isn't nudged twice with two different buttons), and either
+    continuous (always open) or with at least one shift that hasn't ended yet. Soonest
+    upcoming shift first, continuous opportunities last (they have no date to sort by).
+    Used to nudge a student who's still short of their season requirement even after
+    their upcoming shifts.
 
     Each result is `{"opp": Opportunity, "date_range": str}` — the compact
     `format_date_range` span of the opportunity's remaining shifts, or "Ongoing" for a
@@ -63,11 +66,12 @@ async def available_opportunities_for_student(
             )
         ).all()
     }
+    excluded_ids = signed_up_opp_ids | (exclude_ids or set())
 
     now = now_utc()
     candidates: list[tuple[Optional[datetime], Opportunity, str]] = []
     for opp in opps:
-        if opp.id in signed_up_opp_ids:
+        if opp.id in excluded_ids:
             continue
         if opp.is_continuous:
             candidates.append((None, opp, "Ongoing"))

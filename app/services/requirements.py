@@ -12,8 +12,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
-    DEFAULT_LEVEL_HOURS, HourSubmission, LevelRequirement, Opportunity, Shift,
-    StudentLevel, SubmissionStatus,
+    DEFAULT_LEVEL_HOURS, HourSubmission, LevelRequirement, Opportunity, Shift, Signup,
+    SignupStatus, StudentLevel, SubmissionStatus,
 )
 from app.services.app_settings import season_start_utc
 
@@ -84,6 +84,35 @@ async def season_required_opportunities(
     if since is not None:
         q = q.where(Shift.start_time >= since)
     return list((await db.execute(q)).scalars().all())
+
+
+async def missing_required_opportunities_for_student(
+    db: AsyncSession, student_id: int
+) -> list[Opportunity]:
+    """This student's live required opportunities they haven't signed up for a
+    qualifying shift of — same fulfillment rule `student_progress_report` computes in
+    its all-students batch (a signup counts only on *that* opportunity's own shift,
+    scoped to the same season cutoff), factored out here for a single student so the
+    volunteer-hours DM (`reports.student_vhours_message`) can flag them without the
+    report's batching machinery."""
+    since = await season_start_utc(db)
+    required_opps = await season_required_opportunities(db, since)
+    if not required_opps:
+        return []
+    opp_ids = [o.id for o in required_opps]
+    fulfilled_q = (
+        select(Shift.opportunity_id)
+        .join(Signup, Signup.shift_id == Shift.id)
+        .where(
+            Signup.student_id == student_id,
+            Signup.status == SignupStatus.signed_up,
+            Shift.opportunity_id.in_(opp_ids),
+        )
+    )
+    if since is not None:
+        fulfilled_q = fulfilled_q.where(Shift.start_time >= since)
+    fulfilled_ids = {oid for (oid,) in (await db.execute(fulfilled_q)).all()}
+    return [o for o in required_opps if o.id not in fulfilled_ids]
 
 
 def derive_level(grade: Optional[str], team_number: Optional[int]) -> Optional[StudentLevel]:
