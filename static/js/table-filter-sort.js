@@ -23,6 +23,10 @@
  * visible if it has ANY of the checked values (OR, not AND) — matches how "pick which
  * tags to include" reads. Optionally set `data-filter-sort-type="text"` on the `<th>`
  * to alphabetize the funnel list separately from a numeric row `data-sort-type`.
+ *
+ * Set `data-show-count="true"` on a `<th>` to append a live "(N)" after its label — how
+ * many rows the current filter combination leaves visible across every column, not just
+ * this one. Updates alongside the rows on every filter/sort change.
  */
 (function () {
   'use strict';
@@ -85,6 +89,7 @@
     this.columns = [];
     this.sortState = null; // { index, dir: 'asc'|'desc' }
     this.emptyRow = null;
+    this.countEls = [];
     this.build();
   }
 
@@ -121,6 +126,18 @@
 
       th.classList.add('fs-th');
       var inner = th.querySelector('.th-inner') || th;
+
+      if (th.getAttribute('data-show-count') === 'true') {
+        var countEl = document.createElement('span');
+        countEl.className = 'fs-count';
+        var labelEl = inner.querySelector('.th-label');
+        if (labelEl && labelEl.parentNode) {
+          labelEl.parentNode.insertBefore(countEl, labelEl.nextSibling);
+        } else {
+          inner.appendChild(countEl);
+        }
+        self.countEls.push(countEl);
+      }
 
       if (sortable) {
         var caret = document.createElement('i');
@@ -396,6 +413,8 @@
       this.emptyRow.classList.toggle('d-none', !(rows.length > 0 && visibleCount === 0));
       this.tbody.appendChild(this.emptyRow);
     }
+
+    this.countEls.forEach(function (el) { el.textContent = ' (' + visibleCount + ')'; });
   };
 
   function init(tableEl) {

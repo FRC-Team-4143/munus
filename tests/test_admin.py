@@ -1177,6 +1177,21 @@ async def test_admin_report_surfaces_missing_required_opportunity(client, db, ma
     assert 'title="Missing: Bag Night"' in report.text
 
 
+async def test_admin_report_student_header_carries_live_count_attribute(
+    client, db, make_student
+):
+    """The Student header's "(N)" (updated client-side by table-filter-sort.js as
+    column filters are applied, like Legion's members table) needs data-show-count on
+    the <th> to render at all -- this locks in that markup contract."""
+    await _login(client)
+    await make_student(name="Ada Lovelace")
+
+    report = await client.get("/admin/report")
+    assert report.status_code == 200
+    assert 'data-col="student"' in report.text
+    assert 'data-show-count="true"' in report.text
+
+
 async def test_admin_report_approved_and_projected_carry_ahead_of_requirement_filter_value(
     client, db, make_student
 ):
