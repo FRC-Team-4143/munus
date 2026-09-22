@@ -6,6 +6,23 @@
  * `data-empty-text` on the `<table>` to customize the "no rows match" placeholder
  * shown when filters exclude every row. See CLAUDE.md / the roster/report pages for
  * the full markup contract.
+ *
+ * A column sorts and filters on the same `data-value` by default (e.g. a name, or a
+ * category like "met"/"not_met"). A numeric column that should filter on a derived
+ * category instead of enumerating every distinct number — e.g. "Approved" hours,
+ * sortable numerically but filtered as ahead-of-requirement/not — sets
+ * `data-filter-value`/`data-filter-label` on the `<td>` too; when present these are
+ * used for filtering (funnel + visibility) while `data-value` still drives sorting.
+ *
+ * A cell that can belong to several filter categories at once (e.g. "missing these
+ * required opportunities", a list of names) sets `data-filter-values` instead — a
+ * comma-separated list. The funnel then lists every distinct name across all rows,
+ * each name is its own filter option (no `data-filter-label` needed — the name is the
+ * label), an empty list is treated as the `(none)` option, and a row matches if it's
+ * still `d-none`-eligible under every column, but *within* this one column a row is
+ * visible if it has ANY of the checked values (OR, not AND) — matches how "pick which
+ * tags to include" reads. Optionally set `data-filter-sort-type="text"` on the `<th>`
+ * to alphabetize the funnel list separately from a numeric row `data-sort-type`.
  */
 (function () {
   'use strict';
@@ -25,14 +42,38 @@
     return numeric ? (parseFloat(a) || 0) - (parseFloat(b) || 0) : compareText(a, b);
   }
 
+  // Sort value: always `data-value` — a numeric column needs its real number here.
   function cellValue(td) {
     var v = td ? td.getAttribute('data-value') : null;
     return v === null || v === '' ? NONE_VALUE : v;
   }
 
+  // Filter value: `data-filter-value` when the cell sets one (a derived category),
+  // otherwise falls back to the same `data-value` sorting uses.
+  function cellFilterValue(td) {
+    var v = td ? td.getAttribute('data-filter-value') : null;
+    if (v === null) return cellValue(td);
+    return v === '' ? NONE_VALUE : v;
+  }
+
+  // Filter values (plural): `data-filter-values` when the cell sets one — a
+  // comma-separated list, e.g. several missing opportunity names — otherwise a
+  // single-element array wrapping cellFilterValue() so every other column's existing
+  // single-value behavior is unchanged.
+  function cellFilterValues(td) {
+    if (!td) return [NONE_VALUE];
+    var raw = td.getAttribute('data-filter-values');
+    if (raw === null) return [cellFilterValue(td)];
+    var parts = raw.split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s !== ''; });
+    return parts.length ? parts : [NONE_VALUE];
+  }
+
   function cellLabel(td, value) {
     if (value === NONE_VALUE) return NONE_LABEL;
-    var label = td.getAttribute('data-label');
+    // A data-filter-values cell has no per-cell label to read — each value (e.g. an
+    // opportunity name) is already human-readable and is its own label.
+    if (td.getAttribute('data-filter-values') !== null) return value;
+    var label = td.getAttribute('data-filter-label') || td.getAttribute('data-label');
     if (label !== null && label !== '') return label;
     return (td.textContent || '').trim();
   }
@@ -68,8 +109,14 @@
 
       var sortable = th.getAttribute('data-sortable') === 'true';
       var sortType = th.getAttribute('data-sort-type') || 'text';
+      // The funnel's own value list can order itself differently than row sorting does
+      // — e.g. a numeric row sort by missing-count next to an alphabetized name list.
+      var filterSortType = th.getAttribute('data-filter-sort-type') || sortType;
       var filterable = th.getAttribute('data-filter') !== 'none';
-      var def = { key: col, index: index, th: th, sortable: sortable, sortType: sortType, filterable: filterable, selected: null };
+      var def = {
+        key: col, index: index, th: th, sortable: sortable, sortType: sortType,
+        filterSortType: filterSortType, filterable: filterable, selected: null,
+      };
       self.columns.push(def);
 
       th.classList.add('fs-th');
@@ -128,12 +175,13 @@
     var out = [];
     this.rows().forEach(function (tr) {
       var td = tr.children[col.index];
-      var value = cellValue(td);
-      if (seen.hasOwnProperty(value)) return;
-      seen[value] = true;
-      out.push({ value: value, label: cellLabel(td, value) });
+      cellFilterValues(td).forEach(function (value) {
+        if (seen.hasOwnProperty(value)) return;
+        seen[value] = true;
+        out.push({ value: value, label: cellLabel(td, value) });
+      });
     });
-    var numeric = col.sortType === 'num';
+    var numeric = col.filterSortType === 'num';
     out.sort(function (a, b) { return compareValues(a.value, b.value, numeric); });
     return out;
   };
@@ -318,7 +366,10 @@
       var visible = self.columns.every(function (col) {
         if (!col.selected) return true;
         var td = tr.children[col.index];
-        return col.selected.values.indexOf(cellValue(td)) !== -1;
+        // A single-value cell is just a 1-element array here, so this is a plain
+        // membership check for every other column — only a data-filter-values cell
+        // (several categories at once) makes this a real "has any checked one" test.
+        return cellFilterValues(td).some(function (v) { return col.selected.values.indexOf(v) !== -1; });
       });
       tr.classList.toggle('d-none', !visible);
       if (visible) visibleCount++;

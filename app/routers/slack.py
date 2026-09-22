@@ -144,13 +144,13 @@ async def slack_command(
         )
 
     # Same summary the admin "Notify students" button DMs — built in one place so they match.
-    # Ephemeral response (only the caller sees it); the dashboard link is a plain mrkdwn
-    # hyperlink, not an interactive button, so it never fires an interaction callback.
-    reply = await student_vhours_message(db, student)
+    # Ephemeral response (only the caller sees it). Each suggested opportunity's Sign up
+    # button reuses the opportunity_view action, same as the channel announcement's.
+    text, blocks = await student_vhours_message(db, student)
     return JSONResponse({
         "response_type": "ephemeral",
-        "text": reply,
-        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": reply}}],
+        "text": text,
+        "blocks": blocks,
     })
 
 

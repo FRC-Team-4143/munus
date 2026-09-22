@@ -460,9 +460,12 @@ async def test_admin_sidebar_hides_legion_link_when_unconfigured(client):
         settings.legion_base_url = original
 
 
-async def test_report_notify_dms_slack_linked_students(
+async def test_report_notify_dms_posted_student_ids(
     client, db, monkeypatch, make_student, make_opportunity, make_shift
 ):
+    """The Notify button has no server-side scoping of its own — it posts whichever
+    student ids the browser gathered from the table's currently-visible rows, and the
+    route just DMs whichever of those have a linked Slack account."""
     import app.routers.admin as adminmod
     from app.models import Signup, SignupStatus
 
@@ -476,13 +479,17 @@ async def test_report_notify_dms_slack_linked_students(
 
     await _login(client)
     linked = await make_student(code="rn000001", slack="U0STU")
-    await make_student(code="rn000002")  # no Slack ID -> skipped
+    unlinked = await make_student(code="rn000002")  # no Slack ID -> skipped
     opp = await make_opportunity(name="Beach Cleanup")
     shift = await make_shift(opp.id, start_in_hours=24)
     db.add(Signup(shift_id=shift.id, student_id=linked.id, status=SignupStatus.signed_up))
     await db.commit()
 
-    resp = await client.post("/admin/report/notify", follow_redirects=False)
+    resp = await client.post(
+        "/admin/report/notify",
+        data={"student_id": [linked.id, unlinked.id]},
+        follow_redirects=False,
+    )
     assert resp.status_code == 303
     assert "notified=1" in resp.headers["location"]
     # Only the Slack-linked student is DMed, with the /vhours summary content.
@@ -491,11 +498,12 @@ async def test_report_notify_dms_slack_linked_students(
     assert "Beach Cleanup" in calls[0][1]
 
 
-async def test_report_notify_incomplete_only_dms_students_behind(
+async def test_report_notify_only_dms_posted_ids_not_whole_roster(
     client, db, monkeypatch, make_student
 ):
+    """Posting a subset of ids (what the JS gathers from a filtered table) only DMs
+    that subset, even with other Slack-linked students on the roster."""
     import app.routers.admin as adminmod
-    from app.models import HourSubmission, StudentLevel, SubmissionStatus
 
     calls = []
 
@@ -506,19 +514,35 @@ async def test_report_notify_incomplete_only_dms_students_behind(
     monkeypatch.setattr(adminmod, "send_dm", fake_send_dm)
 
     await _login(client)
-    on_track = await make_student(
-        name="OnTrack", code="ot000001", slack="U0MET", level=StudentLevel.freshman  # req 5
-    )
-    db.add(HourSubmission(student_id=on_track.id, hours=6.0, status=SubmissionStatus.approved))
-    await make_student(
-        name="Behind", code="bh000001", slack="U0BEHIND", level=StudentLevel.freshman
-    )
-    await db.commit()
+    selected = await make_student(name="Selected", code="se000001", slack="U0SEL")
+    await make_student(name="NotSelected", code="ns000001", slack="U0NOTSEL")
 
-    resp = await client.post("/admin/report/notify?incomplete=1", follow_redirects=False)
+    resp = await client.post(
+        "/admin/report/notify", data={"student_id": [selected.id]}, follow_redirects=False
+    )
     assert resp.status_code == 303
     assert "notified=1" in resp.headers["location"]
-    assert calls == ["U0BEHIND"]
+    assert calls == ["U0SEL"]
+
+
+async def test_report_notify_with_no_ids_sends_nothing(client, db, monkeypatch, make_student):
+    import app.routers.admin as adminmod
+
+    calls = []
+
+    async def fake_send_dm(uid, text, blocks=None):
+        calls.append(uid)
+        return "ts"
+
+    monkeypatch.setattr(adminmod, "send_dm", fake_send_dm)
+
+    await _login(client)
+    await make_student(slack="U0X")
+
+    resp = await client.post("/admin/report/notify", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/admin/report"
+    assert calls == []
 
 
 async def test_admin_report_export_csv(client):
@@ -724,6 +748,36 @@ async def test_admin_edit_opportunity_toggles_is_continuous(client, db, make_opp
     await client.post(f"/admin/opportunities/{opp.id}/edit", data={"name": "Outreach Committee"})
     await db.refresh(opp)
     assert opp.is_continuous is False
+
+
+async def test_admin_continuous_opportunity_edit_shows_recorded_sessions(
+    client, db, make_student, make_opportunity
+):
+    from app.models import HourSubmission, SubmissionStatus
+
+    await _login(client)
+    student = await make_student(name="Ada Lovelace", code="ada00001")
+    other = await make_student(name="Grace Hopper", code="gra00002")
+    opp = await make_opportunity(name="CAD Subteam", is_continuous=True)
+    db.add(HourSubmission(
+        student_id=student.id, opportunity_id=opp.id, hours=3.5,
+        report="Designed a bracket", status=SubmissionStatus.approved,
+    ))
+    db.add(HourSubmission(
+        student_id=other.id, opportunity_id=opp.id, hours=2.0,
+        report="Still pending", status=SubmissionStatus.pending,
+    ))
+    await db.commit()
+
+    edit = await client.get(f"/admin/opportunities/{opp.id}/edit")
+    assert edit.status_code == 200
+    assert "Recorded Sessions" in edit.text
+    assert "Ada Lovelace" in edit.text
+    assert "3.50" in edit.text
+    assert "Designed a bracket" in edit.text
+    # Only approved hours show — pending/rejected submissions stay in Admin -> Submissions.
+    assert "Grace Hopper" not in edit.text
+    assert "Still pending" not in edit.text
 
 
 async def test_admin_create_required_opportunity(client, db):
@@ -1121,6 +1175,58 @@ async def test_admin_report_surfaces_missing_required_opportunity(client, db, ma
     report = await client.get("/admin/report")
     assert report.status_code == 200
     assert 'title="Missing: Bag Night"' in report.text
+
+
+async def test_admin_report_approved_and_projected_carry_ahead_of_requirement_filter_value(
+    client, db, make_student
+):
+    """Approved/Projected are numeric (sortable on the real hours via data-value) but
+    filter as an ahead/not-ahead-of-requirement category via data-filter-value, so the
+    funnel doesn't enumerate every distinct hour total."""
+    from app.models import HourSubmission, StudentLevel, SubmissionStatus
+
+    await _login(client)
+    ahead = await make_student(name="Ahead", code="ah000001", level=StudentLevel.freshman)  # req 5
+    db.add(HourSubmission(student_id=ahead.id, hours=6.0, status=SubmissionStatus.approved))
+    await make_student(name="Behind", code="bh000001", level=StudentLevel.freshman)
+    await db.commit()
+
+    report = await client.get("/admin/report")
+    assert report.status_code == 200
+    text = report.text
+    assert 'data-filter-value="ahead"' in text
+    assert 'data-filter-label="Ahead of requirement"' in text
+    assert 'data-filter-value="not_ahead"' in text
+    assert 'data-filter-label="Not ahead of requirement"' in text
+
+
+async def test_admin_report_required_opps_carries_named_filter_values(
+    client, db, make_student, make_opportunity, make_shift
+):
+    """Required Opps stays numerically sortable on the missing count (data-value) but
+    filters on the actual missing opportunity name(s) (data-filter-values), so the
+    funnel lets an admin pick a specific required opportunity rather than a generic
+    complete-vs-not toggle."""
+    from app.models import Signup, SignupStatus, StudentLevel
+
+    await _login(client)
+    complete = await make_student(name="Complete", code="co000001", level=StudentLevel.freshman)
+    opp1 = await make_opportunity(name="Bag Night", is_required=True)
+    opp2 = await make_opportunity(name="Food Drive", is_required=True)
+    shift1 = await make_shift(opp1.id, start_in_hours=24)
+    shift2 = await make_shift(opp2.id, start_in_hours=24)
+    db.add(Signup(shift_id=shift1.id, student_id=complete.id, status=SignupStatus.signed_up))
+    db.add(Signup(shift_id=shift2.id, student_id=complete.id, status=SignupStatus.signed_up))
+    await make_student(name="Missing", code="mi000001", level=StudentLevel.freshman)
+    await db.commit()
+
+    report = await client.get("/admin/report")
+    assert report.status_code == 200
+    text = report.text
+    # Complete: neither required opportunity missing -> an empty filter-values list.
+    assert 'data-filter-values=""' in text
+    # Missing: both named opportunities present so either can be picked individually.
+    assert 'data-filter-values="Bag Night, Food Drive"' in text
 
 
 async def test_admin_edit_shift_updates_fields(client, db, make_opportunity, make_shift):

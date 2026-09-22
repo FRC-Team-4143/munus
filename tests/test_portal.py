@@ -215,6 +215,37 @@ async def test_continuous_opportunity_shows_log_hours_form(client, make_student,
     assert "Sign up" not in detail.text
 
 
+async def test_continuous_opportunity_shows_recorded_sessions(
+    client, db, make_student, make_opportunity
+):
+    from app.models import HourSubmission, SubmissionStatus
+
+    student = await make_student(name="Ada Lovelace", code="ada00001")
+    other = await make_student(name="Grace Hopper", code="gra00002")
+    opp = await make_opportunity(name="CAD Subteam", is_continuous=True)
+    db.add(HourSubmission(
+        student_id=student.id, opportunity_id=opp.id, hours=3.5,
+        report="Designed a bracket", status=SubmissionStatus.approved,
+    ))
+    db.add(HourSubmission(
+        student_id=other.id, opportunity_id=opp.id, hours=2.0,
+        report="Still pending", status=SubmissionStatus.pending,
+    ))
+    await db.commit()
+
+    await _identify(client, "ada00001")
+    detail = await client.get(f"/opportunities/{opp.id}")
+    assert detail.status_code == 200
+    assert "Recorded Sessions" in detail.text
+    assert "Ada Lovelace" in detail.text
+    assert "3.50" in detail.text
+    assert "Designed a bracket" in detail.text
+    # Only approved hours show — a still-pending submission is a review-queue concern,
+    # not a confirmed session.
+    assert "Grace Hopper" not in detail.text
+    assert "Still pending" not in detail.text
+
+
 async def test_log_continuous_hours_creates_pending_submission(
     client, db, make_student, make_opportunity
 ):

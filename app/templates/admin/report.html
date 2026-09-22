@@ -48,31 +48,24 @@
 {% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+<div class="d-flex justify-content-between align-items-center mb-1 flex-wrap gap-2">
   <h2 class="mb-0">Season Progress Report</h2>
-  {% set qs = "" %}
-  {% if current_level %}{% set qs = qs ~ "&level=" ~ current_level %}{% endif %}
   <div class="d-flex gap-2 flex-wrap">
-    <form method="post" action="/admin/report/notify?{{ qs[1:] }}"
-          onsubmit="return confirm('DM every student with a linked Slack their volunteer-hours summary?')">
-      <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-bell me-1"></i>Notify students</button>
-    </form>
     {% if rows %}
-    <form method="post" action="/admin/report/notify?{{ (qs ~ '&incomplete=1')[1:] }}"
-          onsubmit="return confirm('DM students who haven\'t yet met their season requirement their volunteer-hours summary?')">
-      <button type="submit" class="btn btn-sm btn-outline-warning">
-        <i class="bi bi-bell-fill me-1"></i>Notify students behind ({{ rows|length - met_count }})
+    <form method="post" action="/admin/report/notify" id="notifyForm">
+      <button type="submit" class="btn btn-sm btn-outline-primary" id="notifyBtn">
+        <i class="bi bi-bell me-1"></i>Notify
       </button>
     </form>
     {% endif %}
     <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#exportReportModal">
       <i class="bi bi-download me-1"></i>Export CSV
     </button>
-    <a href="/admin/report/search" class="btn btn-sm btn-link text-muted">
-      <i class="bi bi-search me-1"></i>Search students
-    </a>
   </div>
 </div>
+{% if rows %}
+<div class="text-end small text-muted mb-3">Notify DMs whoever the column filters below currently leave visible.</div>
+{% endif %}
 
 {% if request.query_params.get('notified') is not none %}
 <div class="alert alert-success alert-dismissible fade show py-2" role="alert">
@@ -81,26 +74,6 @@
   <button type="button" class="btn-close py-2" data-bs-dismiss="alert"></button>
 </div>
 {% endif %}
-
-<!-- Scope selector, not a view filter: unlike the per-column funnel filters (client-side,
-     rows only) this re-queries and also drives the Notify buttons, the CSV export, and the
-     met-requirement totals. -->
-<form method="get" class="row g-2 mb-3">
-  <div class="col-auto">
-    <label class="form-label small mb-1">Level Scope</label>
-    <select name="level" class="form-select form-select-sm" onchange="this.form.submit()">
-      <option value="">All levels</option>
-      {% for l in levels %}
-      <option value="{{ l.value }}" {% if current_level == l.value %}selected{% endif %}>{{ l | levellabel }}</option>
-      {% endfor %}
-    </select>
-    <div class="small text-muted mt-1" style="max-width: 24rem;">
-      Also scopes the Notify buttons, CSV export, and the met-requirement counts — not just
-      the rows shown. To only narrow the table, use the <i class="bi bi-funnel"></i> on the
-      Level column.
-    </div>
-  </div>
-</form>
 
 <div class="modal fade" id="exportReportModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog">
@@ -115,7 +88,15 @@
             One row per submission, grouped by student, with an approved hours total
             after each student. Leave dates blank for all time.
           </p>
-          {% if current_level %}<input type="hidden" name="level" value="{{ current_level }}">{% endif %}
+          <div class="mb-3">
+            <label class="form-label small mb-1">Level</label>
+            <select name="level" class="form-select form-select-sm">
+              <option value="">All levels</option>
+              {% for l in levels %}
+              <option value="{{ l.value }}">{{ l | levellabel }}</option>
+              {% endfor %}
+            </select>
+          </div>
           <div class="row g-2">
             <div class="col-auto">
               <label class="form-label small mb-1">From</label>
@@ -155,8 +136,8 @@
   </div>
   <div class="card-body p-0" style="overflow-x: auto;">
     <table class="table table-hover mb-0 report-table" data-filter-sort data-empty-text="No students match the current filters.">
-      {% macro fs_th(label, col, sortable=false, sort_type='text', filterable=true, extra_class='') %}
-      <th class="fs-th {{ extra_class }}" data-col="{{ col }}"{% if sortable %} data-sortable="true" data-sort-type="{{ sort_type }}"{% endif %}{% if not filterable %} data-filter="none"{% endif %}>
+      {% macro fs_th(label, col, sortable=false, sort_type='text', filterable=true, extra_class='', filter_sort_type=none) %}
+      <th class="fs-th {{ extra_class }}" data-col="{{ col }}"{% if sortable %} data-sortable="true" data-sort-type="{{ sort_type }}"{% endif %}{% if not filterable %} data-filter="none"{% endif %}{% if filter_sort_type %} data-filter-sort-type="{{ filter_sort_type }}"{% endif %}>
         <span class="th-inner d-inline-flex align-items-center"><span class="th-label">{{ label }}</span></span>
       </th>
       {% endmacro %}
@@ -164,13 +145,16 @@
         <tr>
           {{ fs_th('Student', 'student', sortable=true, filterable=false) }}
           {{ fs_th('Level', 'level', sortable=true) }}
-          {{ fs_th('Approved', 'approved', sortable=true, sort_type='num', filterable=false, extra_class='text-end') }}
-          {{ fs_th('Projected', 'projected', sortable=true, sort_type='num', filterable=false, extra_class='text-end') }}
+          {{ fs_th('Approved', 'approved', sortable=true, sort_type='num', extra_class='text-end') }}
+          {{ fs_th('Projected', 'projected', sortable=true, sort_type='num', extra_class='text-end') }}
           {{ fs_th('Required', 'required', sortable=true, sort_type='num', filterable=false, extra_class='text-end') }}
           <th>Progress</th>
           <th class="text-center">Pending</th>
           <th class="text-center">Upcoming</th>
-          {{ fs_th('Required Opps', 'reqopps', sortable=true, sort_type='num', filterable=false, extra_class='text-center') }}
+          {# The funnel lists distinct required-opportunity names, so it sorts itself
+             alphabetically (filter_sort_type) even though the column's own row sort
+             (sort_type) is numeric, by missing count. #}
+          {{ fs_th('Required Opps', 'reqopps', sortable=true, sort_type='num', filter_sort_type='text', extra_class='text-center') }}
           {{ fs_th('Met', 'met', sortable=true, extra_class='text-center') }}
         </tr>
       </thead>
@@ -185,8 +169,14 @@
             {% if not r.student.is_active %}<span class="badge bg-secondary ms-1">Archived</span>{% endif %}
           </td>
           <td class="text-muted" data-value="{{ r.student.level.value if r.student.level else '' }}" data-label="{{ r.student.level | levellabel }}">{{ r.student.level | levellabel }}</td>
-          <td class="text-end fw-semibold" data-value="{{ r.approved }}">{{ '%.2f' % r.approved }}</td>
-          <td class="text-end" data-value="{{ r.projected }}">
+          <td class="text-end fw-semibold" data-value="{{ r.approved }}"
+              data-filter-value="{{ 'ahead' if r.approved > r.required else 'not_ahead' }}"
+              data-filter-label="{{ 'Ahead of requirement' if r.approved > r.required else 'Not ahead of requirement' }}">
+            {{ '%.2f' % r.approved }}
+          </td>
+          <td class="text-end" data-value="{{ r.projected }}"
+              data-filter-value="{{ 'ahead' if r.projected > r.required else 'not_ahead' }}"
+              data-filter-label="{{ 'Ahead of requirement' if r.projected > r.required else 'Not ahead of requirement' }}">
             {{ '%.2f' % r.projected }}{% if r.projected > r.approved %}<i class="bi bi-arrow-up-short text-success"></i>{% endif %}
           </td>
           <td class="text-end text-muted" data-value="{{ r.required }}">{{ '%.2f' % r.required }}</td>
@@ -200,7 +190,8 @@
           </td>
           <td class="text-center">{% if r.pending_count %}<span class="badge bg-warning text-dark">{{ r.pending_count }}</span>{% else %}—{% endif %}</td>
           <td class="text-center">{% if r.upcoming_count %}<span class="badge bg-secondary">{{ r.upcoming_count }}</span>{% else %}—{% endif %}</td>
-          <td class="text-center" data-value="{{ r.missing_required|length }}">
+          <td class="text-center" data-value="{{ r.missing_required|length }}"
+              data-filter-values="{{ r.missing_required|join(', ') }}">
             {% if r.missing_required %}
             <span class="badge bg-danger" title="Missing: {{ r.missing_required|join(', ') }}">{{ r.missing_required|length }} missing</span>
             {% else %}
@@ -242,6 +233,42 @@
 
 <script>
   (function () {
+    // The notify button has no filtering logic of its own — it reads whichever rows the
+    // table's own column filters (table-filter-sort.js, which just toggles a `d-none`
+    // class) currently leave visible, and posts their student ids. Narrowing to a level,
+    // a not-met status, a name, etc. via the column funnels is what scopes who gets DMed.
+    var notifyForm = document.getElementById('notifyForm');
+    if (notifyForm) {
+      notifyForm.addEventListener('submit', function (e) {
+        var table = document.querySelector('table[data-filter-sort]');
+        var ids = [];
+        if (table) {
+          Array.prototype.slice.call(table.querySelectorAll('tbody > tr')).forEach(function (tr) {
+            if (tr.classList.contains('d-none')) return;
+            if (tr.querySelector(':scope > td[colspan]')) return; // empty-filter placeholder row
+            var nameBtn = tr.querySelector('[data-student-id]');
+            if (nameBtn) ids.push(nameBtn.getAttribute('data-student-id'));
+          });
+        }
+        if (!ids.length) {
+          e.preventDefault();
+          alert('No students are currently visible in the table.');
+          return;
+        }
+        if (!confirm('DM ' + ids.length + ' visible student(s) with a linked Slack their volunteer-hours summary?')) {
+          e.preventDefault();
+          return;
+        }
+        ids.forEach(function (id) {
+          var input = document.createElement('input');
+          input.type = 'hidden';
+          input.name = 'student_id';
+          input.value = id;
+          notifyForm.appendChild(input);
+        });
+      });
+    }
+
     var LOADING_HTML = '<div class="text-muted text-center py-4"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>';
     var modalEl = document.getElementById('studentSubsModal');
     var titleEl = document.getElementById('studentSubsModalLabel');

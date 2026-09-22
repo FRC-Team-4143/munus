@@ -263,10 +263,23 @@ async def student_progress_report(
     return rows
 
 
-async def student_vhours_message(db: AsyncSession, student: Student) -> str:
-    """The mrkdwn body of the `/vhours` reply — season progress, projected total, upcoming
-    shifts, and a one-tap dashboard link. Shared by the Slack slash command and the admin
-    'Notify students' action so both stay identical."""
+async def student_vhours_message(db: AsyncSession, student: Student) -> tuple[str, list[dict]]:
+    """The `/vhours` reply — season progress, projected total, upcoming shifts, a few
+    opportunities to sign up for, and a one-tap dashboard link. Shared by the Slack slash
+    command and the admin 'Notify students' action so both stay identical.
+
+    Returns `(text, blocks)`: `text` is the full mrkdwn summary as a single string (Slack's
+    notification-preview / fallback-client copy — send it as `chat.postMessage`'s `text`
+    alongside `blocks`, never in place of it). `blocks` is what actually renders: each
+    suggested opportunity gets its own `section` with a **Sign up** button as that
+    section's `accessory`, reusing the same `opportunity_view` action id (and
+    `_handle_opportunity_view` handler in routers/slack.py) the channel announcement's
+    button already opens — so the button lands in the identical shift-signup /
+    log-hours modal a student would get from there. A `section` block only ever takes one
+    accessory, which is why suggestions can't share a block the way the plain-text bullet
+    list does; each one is its own block instead, button glued to the line it's for
+    (rather than a trailing row of buttons a reader has to match back to a name above).
+    """
     total = await season_total_hours(db, student.id)
     required = await resolve_required_hours(db, student.level)
     on_track = total >= required
@@ -279,41 +292,64 @@ async def student_vhours_message(db: AsyncSession, student: Student) -> str:
         shift_length_hours(su.shift.start_time, su.shift.end_time) for su in upcoming
     )
 
-    reply = (
+    summary = (
         f"{icon} *Your Volunteer Hours*\n"
         f"Season total: *{total:.2f} / {required:.2f} hrs*"
     )
     if projected > total:
-        reply += f"\nProjected with upcoming shifts: *{projected:.2f} hrs*"
+        summary += f"\nProjected with upcoming shifts: *{projected:.2f} hrs*"
     if on_track:
-        reply += "\nYou've met your requirement — great work! 💪"
+        summary += "\nYou've met your requirement — great work! 💪"
     else:
-        reply += f"\n_{required - total:.2f} hrs still needed this season._"
+        summary += f"\n_{required - total:.2f} hrs still needed this season._"
+
+    text = summary
+    blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": summary}}]
 
     if upcoming:
-        reply += "\n\n*Upcoming shifts:*"
+        upcoming_text = "*Upcoming shifts:*"
         for su in upcoming:
             opp = su.shift.opportunity.name if su.shift.opportunity else "Volunteer shift"
-            reply += f"\n• {opp} — {format_shift_range(su.shift.start_time, su.shift.end_time)}"
+            upcoming_text += f"\n• {opp} — {format_shift_range(su.shift.start_time, su.shift.end_time)}"
+        text += f"\n\n{upcoming_text}"
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": upcoming_text}})
 
     # Still short even counting upcoming shifts — point them at a few more opportunities
     # they could sign up for, so the DM doubles as a nudge rather than just a status check.
     if projected < required:
         available = await available_opportunities_for_student(db, student.id, limit=3)
         if available:
-            reply += "\n\n*Opportunities you could sign up for:*"
+            text += "\n\n*Opportunities you could sign up for:*"
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "*Opportunities you could sign up for:*"},
+            })
             for entry in available:
                 opp = entry["opp"]
                 opp_url = make_link_url(student.member_code, f"/opportunities/{opp.id}")
-                reply += f"\n• <{opp_url}|{opp.name}> — {entry['date_range']}"
+                text += f"\n• <{opp_url}|{opp.name}> — {entry['date_range']}"
+                button_text = "📝 Log hours" if opp.is_continuous else "🙋 Sign up"
+                blocks.append({
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"{opp.name} — {entry['date_range']}"},
+                    "accessory": {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": button_text, "emoji": True},
+                        "action_id": "opportunity_view",
+                        "value": str(opp.id),
+                    },
+                })
 
     # A plain mrkdwn hyperlink (not an interactive button) so it just opens the URL. A
     # signed magic link, so it works on the first tap even in Slack's cookie-less in-app
     # browser — no Approve/Deny round trip. Safe here because this message is only ever
     # a DM or an ephemeral reply, i.e. visible to this student alone.
     dashboard_url = make_link_url(student.member_code)
-    reply += f"\n\n<{dashboard_url}|📊 Open my dashboard>"
-    return reply
+    dashboard_line = f"<{dashboard_url}|📊 Open my dashboard>"
+    text += f"\n\n{dashboard_line}"
+    blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": dashboard_line}})
+
+    return text, blocks
 
 
 def mentor_vhours_message(mentor: Mentor) -> str:
