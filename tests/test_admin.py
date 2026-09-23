@@ -1202,27 +1202,38 @@ async def test_admin_roster_name_header_carries_live_count_attribute(client, db,
     assert 'data-show-count="true"' in roster.text
 
 
-async def test_admin_report_approved_and_projected_carry_ahead_of_requirement_filter_value(
+async def test_admin_report_approved_and_projected_carry_met_requirement_filter_value(
     client, db, make_student
 ):
     """Approved/Projected are numeric (sortable on the real hours via data-value) but
-    filter as an ahead/not-ahead-of-requirement category via data-filter-value, so the
-    funnel doesn't enumerate every distinct hour total."""
+    filter as a met/not-yet-met-requirement category via data-filter-value, so the
+    funnel doesn't enumerate every distinct hour total. Uses >=, matching the Met
+    column's own r.met = approved >= required -- a student exactly at their
+    requirement has met it, not "not yet met"."""
     from app.models import HourSubmission, StudentLevel, SubmissionStatus
 
     await _login(client)
     ahead = await make_student(name="Ahead", code="ah000001", level=StudentLevel.freshman)  # req 5
     db.add(HourSubmission(student_id=ahead.id, hours=6.0, status=SubmissionStatus.approved))
+    exact = await make_student(name="Exact", code="ex000001", level=StudentLevel.freshman)  # req 5
+    db.add(HourSubmission(student_id=exact.id, hours=5.0, status=SubmissionStatus.approved))
     await make_student(name="Behind", code="bh000001", level=StudentLevel.freshman)
     await db.commit()
 
     report = await client.get("/admin/report")
     assert report.status_code == 200
     text = report.text
-    assert 'data-filter-value="ahead"' in text
-    assert 'data-filter-label="Ahead of requirement"' in text
-    assert 'data-filter-value="not_ahead"' in text
-    assert 'data-filter-label="Not ahead of requirement"' in text
+    assert 'data-filter-value="met"' in text
+    assert 'data-filter-label="Met requirement"' in text
+    assert 'data-filter-value="not_met"' in text
+    assert 'data-filter-label="Not yet met"' in text
+
+    # The row for the exactly-at-requirement student must be in the "met" bucket, not
+    # "not_met" -- check its own <td>, not just that both labels appear anywhere.
+    row_start = text.index('data-student-name="Exact"')
+    approved_cell_start = text.index('data-value="5.0"', row_start)
+    exact_cell = text[approved_cell_start:approved_cell_start + 200]
+    assert 'data-filter-value="met"' in exact_cell
 
 
 async def test_admin_report_required_opps_carries_named_filter_values(
